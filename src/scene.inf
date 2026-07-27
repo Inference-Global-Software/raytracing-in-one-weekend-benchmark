@@ -1,0 +1,186 @@
+// Scene construction. Two scenes share one layout: a 23-row grid of 22-slot
+// sphere rows. Rows 0..21 are the book's 22x22 random field (scene 1 only);
+// row 22 holds the fixed spheres (ground + heroes, or the showcase set).
+// Unused slots have radius 0 and are skipped by the integrator.
+//
+// The book generates the random field from one sequential RNG stream while
+// building a growable list. Here every cell derives its own seed from its
+// grid coordinates (same construction as per-sample seeds), which is
+// order-independent — a requirement for building the scene in per-row chunks
+// that fit the 64 KB analyzed stack budget (A036) — and still yields the
+// book's distribution: 80% diffuse (albedo = rand * rand), 15% metal
+// (albedo in [0.5,1), fuzz in [0,0.5)), 5% glass, centers jittered 0.9
+// around the cell, cells within 0.9 of (4, 0.2, 0) left empty.
+//
+// A sphere is flat scalars (A026 allows one compound level per struct, and
+// the integrator reads individual fields from the grid without copying).
+// rr caches radius^2 in Q20.20.
+
+use fx::{fixmul};
+use rng::{Rand, rand01, seed_for};
+
+pub struct Sphere {
+    cx: i64; cy: i64; cz: i64;
+    radius: i64;
+    rr: i64;
+    mat: i64;
+    ar: i64; ag: i64; ab: i64;
+    fuzz_or_ir: i64;
+}
+
+pub fn zero_sphere() -> Sphere {
+    return Sphere { cx: 0, cy: 0, cz: 0, radius: 0, rr: 0, mat: 0,
+                    ar: 0, ag: 0, ab: 0, fuzz_or_ir: 0 };
+}
+
+// One row (fixed a, b = -11..10) of the book's random sphere field.
+pub fn grid_row(a: i64) -> [Sphere; 22] {
+    const ONE: i64 = 1048576;
+    const HALF: i64 = 524288;
+    const Z: i64 = 0;
+    const U: i64 = 1;
+    const F: i64 = 20;
+    const SALT: i64 = 20260722;
+    const JITTER: i64 = 943718;      // 0.9
+    const RADIUS: i64 = 209715;      // 0.2
+    const GUARD_X: i64 = 4194304;    // 4.0
+    const GUARD_SQ: i64 = 849347;    // 0.81
+    const P_DIFFUSE: i64 = 838861;   // 0.80
+    const P_METAL: i64 = 996147;     // 0.95
+    const IR_GLASS: i64 = 1572864;   // 1.5
+    const M_LAMBERT: i64 = 0;
+    const M_METAL: i64 = 1;
+    const M_GLASS: i64 = 2;
+
+    let zs: Sphere = zero_sphere();
+    let mut row: [Sphere; 22] = [zs, zs, zs, zs, zs, zs, zs, zs, zs, zs, zs,
+                                 zs, zs, zs, zs, zs, zs, zs, zs, zs, zs, zs];
+    let rr_small: i64 = fixmul(RADIUS, RADIUS);
+    let mut bi: i32 = 0;
+    let mut b: i64 = -11;
+    loop bi < 22 {
+        let cs: i64 = seed_for(a, b, SALT);
+        let rmat: Rand = rand01(cs);
+        let rjx: Rand = rand01(rmat.seed);
+        let rjz: Rand = rand01(rjx.seed);
+        let choose: i64 = rmat.value;
+        let cx: i64 = (a << F) + fixmul(JITTER, rjx.value);
+        let cz: i64 = (b << F) + fixmul(JITTER, rjz.value);
+
+        let gx: i64 = cx - GUARD_X;
+        let d2: i64 = fixmul(gx, gx) + fixmul(cz, cz);
+        if d2 > GUARD_SQ {
+            let mut mat: i64 = M_GLASS;
+            let mut ar: i64 = ONE;
+            let mut ag: i64 = ONE;
+            let mut ab: i64 = ONE;
+            let mut fuzz_or_ir: i64 = IR_GLASS;
+            if choose < P_DIFFUSE {
+                let r1x: Rand = rand01(rjz.seed);
+                let r1y: Rand = rand01(r1x.seed);
+                let r1z: Rand = rand01(r1y.seed);
+                let r2x: Rand = rand01(r1z.seed);
+                let r2y: Rand = rand01(r2x.seed);
+                let r2z: Rand = rand01(r2y.seed);
+                mat = M_LAMBERT;
+                ar = fixmul(r1x.value, r2x.value);
+                ag = fixmul(r1y.value, r2y.value);
+                ab = fixmul(r1z.value, r2z.value);
+                fuzz_or_ir = Z;
+            } else {
+                if choose < P_METAL {
+                    let rmx: Rand = rand01(rjz.seed);
+                    let rmy: Rand = rand01(rmx.seed);
+                    let rmz: Rand = rand01(rmy.seed);
+                    let rf: Rand = rand01(rmz.seed);
+                    mat = M_METAL;
+                    ar = HALF + fixmul(HALF, rmx.value);
+                    ag = HALF + fixmul(HALF, rmy.value);
+                    ab = HALF + fixmul(HALF, rmz.value);
+                    fuzz_or_ir = fixmul(HALF, rf.value);
+                }
+            }
+            let t: Sphere = Sphere { cx: cx, cy: RADIUS, cz: cz,
+                                     radius: RADIUS, rr: rr_small, mat: mat,
+                                     ar: ar, ag: ag, ab: ab,
+                                     fuzz_or_ir: fuzz_or_ir };
+            row[bi] = t;
+        }
+        bi = bi + 1;
+        b = b + U;
+    }
+    return row;
+}
+
+// Row 22: the fixed spheres. Scene 1 = book final (ground + three heroes);
+// scene 0 = the June 2026 showcase set (every decimal re-derived at
+// Q20.20 precision rather than x16-rescaled from the old Q16.16 words).
+pub fn hero_row(scene: i64) -> [Sphere; 22] {
+    const SEL_FINAL: i64 = 1;
+
+    let zs: Sphere = zero_sphere();
+    let mut row: [Sphere; 22] = [zs, zs, zs, zs, zs, zs, zs, zs, zs, zs, zs,
+                                 zs, zs, zs, zs, zs, zs, zs, zs, zs, zs, zs];
+    if scene == SEL_FINAL {
+        let ground: Sphere = Sphere {
+            cx: 0, cy: -1048576000, cz: 0,
+            radius: 1048576000, rr: 0, mat: 0,
+            ar: 524288, ag: 524288, ab: 524288, fuzz_or_ir: 0 };
+        let glass: Sphere = Sphere {
+            cx: 0, cy: 1048576, cz: 0,
+            radius: 1048576, rr: 0, mat: 2,
+            ar: 1048576, ag: 1048576, ab: 1048576, fuzz_or_ir: 1572864 };
+        let brown: Sphere = Sphere {
+            cx: -4194304, cy: 1048576, cz: 0,
+            radius: 1048576, rr: 0, mat: 0,
+            ar: 419430, ag: 209715, ab: 104858, fuzz_or_ir: 0 };
+        let steel: Sphere = Sphere {
+            cx: 4194304, cy: 1048576, cz: 0,
+            radius: 1048576, rr: 0, mat: 1,
+            ar: 734003, ag: 629146, ab: 524288, fuzz_or_ir: 0 };
+        row[0] = ground;
+        row[1] = glass;
+        row[2] = brown;
+        row[3] = steel;
+    } else {
+        let s_ground: Sphere = Sphere {
+            cx: 0, cy: -105381888, cz: -1048576,
+            radius: 104857600, rr: 0, mat: 0,
+            ar: 838861, ag: 838861, ab: 0, fuzz_or_ir: 0 };
+        let s_center: Sphere = Sphere {
+            cx: 0, cy: 0, cz: -1048576,
+            radius: 524288, rr: 0, mat: 0,
+            ar: 104858, ag: 209715, ab: 524288, fuzz_or_ir: 0 };
+        let s_glass: Sphere = Sphere {
+            cx: -1048576, cy: 0, cz: -1048576,
+            radius: 524288, rr: 0, mat: 2,
+            ar: 1048576, ag: 1048576, ab: 1048576, fuzz_or_ir: 1572864 };
+        let s_metal: Sphere = Sphere {
+            cx: 1048576, cy: 0, cz: -1048576,
+            radius: 524288, rr: 0, mat: 1,
+            ar: 838861, ag: 629146, ab: 209715, fuzz_or_ir: 0 };
+        let s_fuzzy: Sphere = Sphere {
+            cx: -524288, cy: 0, cz: -2097152,
+            radius: 419430, rr: 0, mat: 1,
+            ar: 734003, ag: 734003, ab: 838861, fuzz_or_ir: 209715 };
+        let s_red: Sphere = Sphere {
+            cx: 419430, cy: -262144, cz: -734003,
+            radius: 262144, rr: 0, mat: 0,
+            ar: 838861, ag: 209715, ab: 209715, fuzz_or_ir: 0 };
+        row[0] = s_ground;
+        row[1] = s_center;
+        row[2] = s_glass;
+        row[3] = s_metal;
+        row[4] = s_fuzzy;
+        row[5] = s_red;
+    }
+
+    // Fill the radius^2 cache for whichever slots were populated.
+    let mut i: i32 = 0;
+    loop i < 22 {
+        let r: i64 = row[i].radius;
+        row[i].rr = fixmul(r, r);
+        i = i + 1;
+    }
+    return row;
+}

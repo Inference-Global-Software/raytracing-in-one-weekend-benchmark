@@ -1,0 +1,149 @@
+// The v4 camera: focal geometry scaled by focus distance, defocus expressed
+// as a cone half-angle, pixel jitter as a centered offset around pre-inset
+// pixel centers (the v3 model used aperture/lens_radius and corner-UV lerp).
+//
+// Trigonometry happens at scene-definition time: callers pass tan(vfov/2) and
+// tan(defocus_angle/2) as Q20.20 constants, everything here is arithmetic.
+//
+// get_ray returns a UNIT direction. The book keeps directions unnormalized
+// and divides the quadratic by a = |d|^2; in Q20.20 that reciprocal is the
+// single largest precision loss (the June 2026 renderer's ~0.26% t error came
+// exactly from recip(lensq(dir)) with |dir| ~ 13). One normalization per ray
+// makes a = 1, so the sphere quadratic needs no division at all and t is a
+// world-space distance. The geometry (hit points, normals, face orientation)
+// is invariant under this reparameterization.
+
+use fx::{fixmul, fixdiv};
+use vec::{Vec3, cross};
+use rng::{Rand, rand01};
+use sample::{VecRand, unit_disk};
+
+// Pixel deltas are carried at Q24.40 (duh/dvh = (viewport_vec << 20) / dim,
+// computed once per camera): a Q20.20 delta quantizes at ~1e-6 and the error
+// grows linearly with the pixel coordinate (~2 px of geometric skew at the
+// frame edge of a 4K render), while a Q40 delta makes it a constant ~2^-9
+// ulp. get_ray then pays one multiply+shift per component — no per-ray
+// division. The Q40-by-Q20 product duh*sx == viewport_extent * 2^60 raw is
+// resolution-independent and fits i64 for any viewport under 8 world units
+// (the widest camera here, the final scene's, spans 6.3).
+pub struct Camera {
+    center: Vec3;
+    pixel00: Vec3;
+    duh: Vec3;
+    dvh: Vec3;
+    ddisk_u: Vec3;
+    ddisk_v: Vec3;
+    lens: i64;
+}
+
+pub struct RayRand {
+    orig: Vec3;
+    dir: Vec3;
+    seed: i64;
+}
+
+// Exact v4 initialize() order. h_tan = tan(vfov/2), dtan = tan(defocus/2),
+// w_fx / h_fx are the image dimensions as Q20.20.
+pub fn make_camera(lookfrom: Vec3, lookat: Vec3, vup: Vec3, h_tan: i64,
+                   focus: i64, dtan: i64, w_fx: i64, h_fx: i64) -> Camera {
+    const HALF: i64 = 524288;
+
+    let vp_half: i64 = fixmul(h_tan, focus);
+    let vp_h: i64 = vp_half + vp_half;
+    let aspect: i64 = fixdiv(w_fx, h_fx);
+    let vp_w: i64 = fixmul(vp_h, aspect);
+
+    let fl: Vec3 = lookfrom.sub(lookat);
+    let w: Vec3 = fl.unit();
+    let cu: Vec3 = cross(vup, w);
+    let u: Vec3 = cu.unit();
+    let v: Vec3 = cross(w, u);
+
+    let vp_u: Vec3 = u.scale(vp_w);
+    let nv: Vec3 = v.neg();
+    let vp_v: Vec3 = nv.scale(vp_h);
+
+    // Q24.40 deltas: (Q20 viewport component << 40) / Q20 dimension.
+    // The pre-shift needs |vp component| < 8 units to stay inside i64
+    // (worst here: the final scene's vp_w = 6.3).
+    const F: i64 = 20;
+    const S40: i64 = 40;
+    let duhx: i64 = (vp_u.x << S40) / w_fx;
+    let duhy: i64 = (vp_u.y << S40) / w_fx;
+    let duhz: i64 = (vp_u.z << S40) / w_fx;
+    let duh: Vec3 = Vec3 { x: duhx, y: duhy, z: duhz };
+    let dvhx: i64 = (vp_v.x << S40) / h_fx;
+    let dvhy: i64 = (vp_v.y << S40) / h_fx;
+    let dvhz: i64 = (vp_v.z << S40) / h_fx;
+    let dvh: Vec3 = Vec3 { x: dvhx, y: dvhy, z: dvhz };
+    let du: Vec3 = Vec3 { x: duhx >> F, y: duhy >> F, z: duhz >> F };
+    let dv: Vec3 = Vec3 { x: dvhx >> F, y: dvhy >> F, z: dvhz >> F };
+
+    let fw: Vec3 = w.scale(focus);
+    let c1: Vec3 = lookfrom.sub(fw);
+    let hu: Vec3 = vp_u.scale(HALF);
+    let c2: Vec3 = c1.sub(hu);
+    let hv: Vec3 = vp_v.scale(HALF);
+    let ul: Vec3 = c2.sub(hv);
+    let dsum: Vec3 = du.add(dv);
+    let dhalf: Vec3 = dsum.scale(HALF);
+    let pixel00: Vec3 = ul.add(dhalf);
+
+    let lens: i64 = fixmul(focus, dtan);
+    let ddisk_u: Vec3 = u.scale(lens);
+    let ddisk_v: Vec3 = v.scale(lens);
+
+    return Camera { center: lookfrom, pixel00: pixel00, duh: duh, dvh: dvh,
+                    ddisk_u: ddisk_u, ddisk_v: ddisk_v, lens: lens };
+}
+
+// v4 get_ray(i, j): jitter in [-0.5, 0.5) around the pixel center, origin on
+// the defocus disk when the lens is open, unit direction out.
+pub fn get_ray(cam: Camera, px: i64, py: i64, s: i64) -> RayRand {
+    const F: i64 = 20;
+    const HALF: i64 = 524288;
+    const Z: i64 = 0;
+
+    let jx: Rand = rand01(s);
+    let jy: Rand = rand01(jx.seed);
+    let mut seed: i64 = jy.seed;
+    let ox: i64 = jx.value - HALF;
+    let oy: i64 = jy.value - HALF;
+
+    let sx: i64 = (px << F) + ox;
+    let sy: i64 = (py << F) + oy;
+
+    // offset = (duh * s) >> 40: Q24.40 delta times Q20.20 coordinate,
+    // one multiply and one shift per component (see the Camera comment).
+    const S40: i64 = 40;
+    let cduh: Vec3 = cam.duh;
+    let cdvh: Vec3 = cam.dvh;
+    let p00: Vec3 = cam.pixel00;
+    let offu: Vec3 = Vec3 { x: (cduh.x * sx) >> S40,
+                            y: (cduh.y * sx) >> S40,
+                            z: (cduh.z * sx) >> S40 };
+    let offv: Vec3 = Vec3 { x: (cdvh.x * sy) >> S40,
+                            y: (cdvh.y * sy) >> S40,
+                            z: (cdvh.z * sy) >> S40 };
+    let t1: Vec3 = p00.add(offu);
+    let pixel_sample: Vec3 = t1.add(offv);
+
+    let ccenter: Vec3 = cam.center;
+    let mut origin: Vec3 = ccenter;
+    if cam.lens > Z {
+        let dr: VecRand = unit_disk(seed);
+        seed = dr.seed;
+        let dp: Vec3 = dr.v;
+        let cddu: Vec3 = cam.ddisk_u;
+        let cddv: Vec3 = cam.ddisk_v;
+        let pu: Vec3 = cddu.scale(dp.x);
+        let pv: Vec3 = cddv.scale(dp.y);
+        let o1: Vec3 = ccenter.add(pu);
+        let o2: Vec3 = o1.add(pv);
+        origin = o2;
+    }
+
+    let rd: Vec3 = pixel_sample.sub(origin);
+    let ud: Vec3 = rd.unit();
+    return RayRand { orig: origin, dir: ud, seed: seed };
+}

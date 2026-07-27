@@ -1,0 +1,123 @@
+// Vec3 algebra over Q20.20 fixed point.
+//
+// Methods return fresh values (the language has value semantics throughout;
+// `mut self` mutations never reach the caller, so nothing here takes it).
+// Compound-returning calls may only appear as a `let` right-hand side or a
+// `return` operand (A016/A017), so callers bind every intermediate vector.
+//
+// dot() shifts each product separately instead of summing raw products and
+// shifting once: with the final scene's ground sphere, |oc| reaches ~1030
+// units and three raw Q40 products would leave no i64 headroom. The per-term
+// form keeps every intermediate below 2^61 for |components| <= ~1400 units.
+
+use fx::{fixmul, fixdiv, fixsqrt, fabs};
+
+pub struct Vec3 {
+    x: i64;
+    y: i64;
+    z: i64;
+
+    pub fn add(self, o: Vec3) -> Vec3 {
+        return Vec3 { x: self.x + o.x, y: self.y + o.y, z: self.z + o.z };
+    }
+
+    pub fn sub(self, o: Vec3) -> Vec3 {
+        return Vec3 { x: self.x - o.x, y: self.y - o.y, z: self.z - o.z };
+    }
+
+    // Component-wise (Hadamard) product: colour attenuation.
+    pub fn mul(self, o: Vec3) -> Vec3 {
+        let mx: i64 = fixmul(self.x, o.x);
+        let my: i64 = fixmul(self.y, o.y);
+        let mz: i64 = fixmul(self.z, o.z);
+        return Vec3 { x: mx, y: my, z: mz };
+    }
+
+    pub fn scale(self, s: i64) -> Vec3 {
+        let sx: i64 = fixmul(self.x, s);
+        let sy: i64 = fixmul(self.y, s);
+        let sz: i64 = fixmul(self.z, s);
+        return Vec3 { x: sx, y: sy, z: sz };
+    }
+
+    pub fn neg(self) -> Vec3 {
+        return Vec3 { x: -self.x, y: -self.y, z: -self.z };
+    }
+
+    pub fn dot(self, o: Vec3) -> i64 {
+        let px: i64 = fixmul(self.x, o.x);
+        let py: i64 = fixmul(self.y, o.y);
+        let pz: i64 = fixmul(self.z, o.z);
+        return px + py + pz;
+    }
+
+    pub fn lensq(self) -> i64 {
+        return self.dot(self);
+    }
+
+    pub fn length(self) -> i64 {
+        let lsq: i64 = self.lensq();
+        return fixsqrt(lsq);
+    }
+
+    // Unit vector via one division per component (exact to 1 ulp each,
+    // instead of multiplying by a reciprocal that is itself 1-ulp coarse).
+    // Zero-length input degenerates to +Y; callers never produce it on the
+    // hot path (scatter directions are re-derived from unit inputs).
+    pub fn unit(self) -> Vec3 {
+        const Z: i64 = 0;
+        let l: i64 = self.length();
+        if l <= Z {
+            return Vec3 { x: 0, y: 1048576, z: 0 };
+        }
+        let ux: i64 = fixdiv(self.x, l);
+        let uy: i64 = fixdiv(self.y, l);
+        let uz: i64 = fixdiv(self.z, l);
+        return Vec3 { x: ux, y: uy, z: uz };
+    }
+
+    pub fn near_zero(self) -> bool {
+        const EPS: i64 = 8;
+        let ax: i64 = fabs(self.x);
+        let ay: i64 = fabs(self.y);
+        let az: i64 = fabs(self.z);
+        return (ax < EPS) && (ay < EPS) && (az < EPS);
+    }
+}
+
+pub fn cross(a: Vec3, b: Vec3) -> Vec3 {
+    let cx: i64 = fixmul(a.y, b.z) - fixmul(a.z, b.y);
+    let cy: i64 = fixmul(a.z, b.x) - fixmul(a.x, b.z);
+    let cz: i64 = fixmul(a.x, b.y) - fixmul(a.y, b.x);
+    return Vec3 { x: cx, y: cy, z: cz };
+}
+
+// v - 2*dot(v,n)*n  (n unit).
+pub fn reflect(v: Vec3, n: Vec3) -> Vec3 {
+    let d: i64 = v.dot(n);
+    let two_d: i64 = d + d;
+    let s: Vec3 = n.scale(two_d);
+    return v.sub(s);
+}
+
+// Snell refraction of unit vector uv about unit normal n with ratio eta:
+//   r_perp = eta * (uv + cos_theta * n)
+//   r_par  = -sqrt(|1 - |r_perp|^2|) * n
+pub fn refract(uv: Vec3, n: Vec3, eta: i64) -> Vec3 {
+    const ONE_C: i64 = 1048576;
+    let nuv: Vec3 = uv.neg();
+    let mut cos_t: i64 = nuv.dot(n);
+    if cos_t > ONE_C {
+        cos_t = ONE_C;
+    }
+    let cn: Vec3 = n.scale(cos_t);
+    let sum: Vec3 = uv.add(cn);
+    let r_perp: Vec3 = sum.scale(eta);
+    let lp: i64 = r_perp.lensq();
+    let k: i64 = ONE_C - lp;
+    let ak: i64 = fabs(k);
+    let mag: i64 = fixsqrt(ak);
+    let nmag: i64 = -mag;
+    let r_par: Vec3 = n.scale(nmag);
+    return r_perp.add(r_par);
+}

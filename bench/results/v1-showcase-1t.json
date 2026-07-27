@@ -1,0 +1,35 @@
+{
+  "label": "v1-showcase-1t",
+  "timestamp": "2026-07-22T12:34:12.639Z",
+  "wasm": {
+    "path": "bench/modules/main-v1-2026-06.wasm",
+    "bytes": 14478,
+    "sha256": "d616e2b07efe10b37a1fb9c6fd93b845a1eb372e336d050cf173e59ae9463d16"
+  },
+  "settings": {
+    "width": 320,
+    "height": 180,
+    "scene": 0,
+    "spp": 32,
+    "depth": 16,
+    "threads": 1
+  },
+  "host": {
+    "cpu": "Apple M5 Pro",
+    "cores": 18,
+    "arch": "arm64",
+    "platform": "darwin",
+    "node": "v26.0.0",
+    "toolchain_commit": "be1d239"
+  },
+  "timing": {
+    "wall_s": 5.838294958,
+    "px_per_s": 9865.894137649359,
+    "samples_per_s": 315708.6124047795,
+    "ns_per_sample": 3167.4777332899307
+  },
+  "image": {
+    "sha256": "c0e8d580fc578f76c76cad8800741b298968d9659e268fb820a159531f2745a7",
+    "png_bytes": 54549
+  }
+}
