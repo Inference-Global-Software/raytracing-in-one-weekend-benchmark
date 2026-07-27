@@ -1,0 +1,83 @@
+// Deterministic pseudo-randomness: splitmix64 on a pure-i64 state.
+//
+// The June 2026 renderer used xorshift64 with i64 arithmetic right shifts and
+// no masking, which is provably non-bijective (the `x ^ (x >> 7)` stage has a
+// two-element kernel under sign-fill) and carries a hard GF(2)-linear output
+// invariant. splitmix64's two odd-constant multiplies supply the nonlinearity
+// xorshift lacks, and the Weyl-increment state (s += GAMMA) is a bijection
+// with full 2^64 period.
+//
+// Inference has no u64<->i64 conversion, so the state lives in i64 and each
+// logical right shift is emulated as an arithmetic shift plus a mask that
+// clears the sign-fill bits: (z >> k) & ((1 << (64-k)) - 1). Addition and
+// multiplication wrap identically for i64 and u64, so the masked pipeline is
+// bit-exact with the canonical u64 splitmix64.
+//
+// Every draw threads the state explicitly (no globals): functions take a seed
+// and return a Rand { value, seed } pair.
+
+pub struct Rand {
+    value: i64;
+    seed: i64;
+}
+
+// The splitmix64 finalizer: mix a state word into an avalanched output.
+pub fn mix64(s: i64) -> i64 {
+    const C1: i64 = -4658895280553007687;
+    const C2: i64 = -7723592293110705685;
+    const S30: i64 = 30;
+    const S27: i64 = 27;
+    const S31: i64 = 31;
+    const M30: i64 = 17179869183;
+    const M27: i64 = 137438953471;
+    const M31: i64 = 8589934591;
+    let mut z: i64 = s;
+    let sh30: i64 = (z >> S30) & M30;
+    z = z ^ sh30;
+    z = z * C1;
+    let sh27: i64 = (z >> S27) & M27;
+    z = z ^ sh27;
+    z = z * C2;
+    let sh31: i64 = (z >> S31) & M31;
+    z = z ^ sh31;
+    return z;
+}
+
+// Advance the Weyl state and produce the next raw 64-bit output.
+pub fn next(s: i64) -> Rand {
+    const GAMMA: i64 = -7046029254386353131;
+    let ns: i64 = s + GAMMA;
+    let out: i64 = mix64(ns);
+    return Rand { value: out, seed: ns };
+}
+
+// Uniform Q20.20 value in [0, 1): the output's top 20 bits.
+pub fn rand01(s: i64) -> Rand {
+    const S44: i64 = 44;
+    const M44: i64 = 1048575;
+    let r: Rand = next(s);
+    let raw: i64 = r.value;
+    let v: i64 = (raw >> S44) & M44;
+    return Rand { value: v, seed: r.seed };
+}
+
+// Uniform Q20.20 value in [-1, 1): top 21 bits minus ONE.
+pub fn rand_sym(s: i64) -> Rand {
+    const S43: i64 = 43;
+    const M43: i64 = 2097151;
+    const ONE: i64 = 1048576;
+    let r: Rand = next(s);
+    let raw: i64 = r.value;
+    let v: i64 = ((raw >> S43) & M43) - ONE;
+    return Rand { value: v, seed: r.seed };
+}
+
+// Stateless per-sample seed: three finalizer rounds decorrelate the pixel
+// coordinates and sample index (the old renderer's GF(2)-separable
+// xorshift-of-xors hash produced structured sample-to-sample deltas).
+pub fn seed_for(px: i64, py: i64, sample: i64) -> i64 {
+    let h1: i64 = mix64(px);
+    let h2: i64 = mix64(h1 ^ py);
+    let h3: i64 = mix64(h2 ^ sample);
+    return h3;
+}

@@ -1,0 +1,137 @@
+// Material scatter (book v4 semantics): 0 Lambertian, 1 metal, 2 dielectric.
+//
+// v4 differences from the v3-era renderer, implemented here:
+//   * metal: reflect the incoming direction, normalize, THEN add
+//     fuzz * random_unit_vector() (v3 fuzzed with a non-unit sphere point and
+//     never re-normalized). The unit-vector draw happens even at fuzz = 0,
+//     matching the book's RNG consumption.
+//   * dielectric: Schlick reflectance vs a fresh uniform draw; the draw is
+//     hoisted above the `||` because compound-returning calls (rand01) cannot
+//     appear in expression operands, so unlike the book it happens even on
+//     total internal reflection. That only shifts the per-sample RNG stream —
+//     each sample is seeded independently, so no cross-sample structure can
+//     result.
+//
+// Scattered directions are re-normalized before returning: the integrator's
+// sphere quadratic assumes unit directions (a = 1). The book leaves scatter
+// directions unnormalized; every formula used here is direction-scale
+// invariant, so the image is unchanged.
+//
+// All incoming directions must already be unit vectors.
+
+use fx::{fixmul, fixdiv, fixsqrt, recip, pow5};
+use vec::{Vec3, reflect, refract};
+use rng::{Rand, rand01};
+use sample::{VecRand, unit_vec};
+
+pub struct HitRec {
+    p: Vec3;
+    normal: Vec3;
+    t: i64;
+    front: bool;
+    mat: i64;
+    albedo: Vec3;
+    fuzz_or_ir: i64;
+}
+
+pub struct Scatter {
+    att: Vec3;
+    orig: Vec3;
+    dir: Vec3;
+    ok: bool;
+    seed: i64;
+}
+
+// Schlick's reflectance approximation: r0 + (1-r0)(1-cos)^5.
+fn schlick(cos: i64, ri: i64) -> i64 {
+    const ONE: i64 = 1048576;
+    let num: i64 = ONE - ri;
+    let den: i64 = ONE + ri;
+    let r0a: i64 = fixdiv(num, den);
+    let r0: i64 = fixmul(r0a, r0a);
+    let omc: i64 = ONE - cos;
+    let p5: i64 = pow5(omc);
+    let omr0: i64 = ONE - r0;
+    let term: i64 = fixmul(omr0, p5);
+    return r0 + term;
+}
+
+pub fn scatter(rdir: Vec3, h: HitRec, s: i64) -> Scatter {
+    const ONE: i64 = 1048576;
+    const Z: i64 = 0;
+    const M_LAMBERT: i64 = 0;
+    const M_METAL: i64 = 1;
+    let mut seed: i64 = s;
+    let hp: Vec3 = h.p;
+    let n: Vec3 = h.normal;
+    let alb: Vec3 = h.albedo;
+    let mat: i64 = h.mat;
+
+    if mat == M_LAMBERT {
+        // Degenerate-direction guard: the book tests per-component
+        // near-zero, but in Q20.20 a vector with components in the
+        // [8, ~2000] raw window survives that test while lensq()'s
+        // truncation underflows, and unit() would return a badly
+        // over-long "unit" vector. A squared-length floor (the same
+        // 2^-10 used by sample.inf) closes the whole window.
+        const LSQ_FLOOR: i64 = 1024;
+        let rv: VecRand = unit_vec(seed);
+        seed = rv.seed;
+        let rvv: Vec3 = rv.v;
+        let mut ldir: Vec3 = n.add(rvv);
+        let llsq: i64 = ldir.lensq();
+        if llsq <= LSQ_FLOOR {
+            ldir = n;
+        }
+        let lu: Vec3 = ldir.unit();
+        return Scatter { att: alb, orig: hp, dir: lu, ok: true, seed: seed };
+    }
+
+    if mat == M_METAL {
+        let refl: Vec3 = reflect(rdir, n);
+        let ru: Vec3 = refl.unit();
+        let fuzz: i64 = h.fuzz_or_ir;
+        let fv: VecRand = unit_vec(seed);
+        seed = fv.seed;
+        let fvv: Vec3 = fv.v;
+        let fz: Vec3 = fvv.scale(fuzz);
+        let mdir: Vec3 = ru.add(fz);
+        let dn: i64 = mdir.dot(n);
+        let ok: bool = dn > Z;
+        let mu: Vec3 = mdir.unit();
+        return Scatter { att: alb, orig: hp, dir: mu, ok: ok, seed: seed };
+    }
+
+    // Dielectric: attenuation is white, split by Fresnel reflectance.
+    let ir: i64 = h.fuzz_or_ir;
+    let white: Vec3 = Vec3 { x: 1048576, y: 1048576, z: 1048576 };
+    let mut ratio: i64 = ir;
+    if h.front {
+        ratio = recip(ir);
+    }
+    let nrd: Vec3 = rdir.neg();
+    let mut cos_t: i64 = nrd.dot(n);
+    if cos_t > ONE {
+        cos_t = ONE;
+    }
+    let cos2: i64 = fixmul(cos_t, cos_t);
+    let sin2: i64 = ONE - cos2;
+    let sin_t: i64 = fixsqrt(sin2);
+    let rs: i64 = fixmul(ratio, sin_t);
+    let cannot: bool = rs > ONE;
+    let refl_prob: i64 = schlick(cos_t, ratio);
+    let pr: Rand = rand01(seed);
+    seed = pr.seed;
+    let do_reflect: bool = cannot || (refl_prob > pr.value);
+
+    let mut ddir: Vec3 = Vec3 { x: 0, y: 1048576, z: 0 };
+    if do_reflect {
+        let drefl: Vec3 = reflect(rdir, n);
+        ddir = drefl;
+    } else {
+        let drefr: Vec3 = refract(rdir, n, ratio);
+        ddir = drefr;
+    }
+    let dxu: Vec3 = ddir.unit();
+    return Scatter { att: white, orig: hp, dir: dxu, ok: true, seed: seed };
+}

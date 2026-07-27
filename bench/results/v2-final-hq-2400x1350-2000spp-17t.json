@@ -1,0 +1,35 @@
+{
+  "label": "v2-final-hq",
+  "timestamp": "2026-07-22T13:42:20.095Z",
+  "wasm": {
+    "path": "out/main.wasm",
+    "bytes": 9492,
+    "sha256": "b1d439687e03621f8dc300c0a46d6e747d0c06177b42fc0c2e06762f58665f5f"
+  },
+  "settings": {
+    "width": 2400,
+    "height": 1350,
+    "scene": 1,
+    "spp": 2000,
+    "depth": 50,
+    "threads": 17
+  },
+  "host": {
+    "cpu": "Apple M5 Pro",
+    "cores": 18,
+    "arch": "arm64",
+    "platform": "darwin",
+    "node": "v26.0.0",
+    "toolchain_commit": "be1d239"
+  },
+  "timing": {
+    "wall_s": 4017.77674275,
+    "px_per_s": 806.4161369460155,
+    "samples_per_s": 1612832.273892031,
+    "ns_per_sample": 620.0272751157407
+  },
+  "image": {
+    "sha256": "2ee31daa850a2f4528e0d85179edb8807a4ee9af3a8b96721b70dfea434ce200",
+    "png_bytes": 3272034
+  }
+}

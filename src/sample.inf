@@ -1,0 +1,73 @@
+// Random direction sampling (book v4 semantics, fixed-point analogues).
+//
+// v4.0.1 replaced normalize(random_in_unit_sphere()) with a single rejection
+// loop that accepts 1e-160 < |p|^2 <= 1 and divides by sqrt once. The
+// fixed-point analogue accepts LSQ_MIN < |p|^2 <= 1 where LSQ_MIN = 2^-10:
+// below that, normalizing a Q20.20 vector amplifies quantization error, and
+// the acceptance volume lost is (2^-10)^(3/2) ~ 3.1e-5 of the unit ball (unmeasurable bias).
+//
+// Rejection loops are bounded (32 tries) with a deterministic fallback, so
+// termination is structural rather than probabilistic. 32 tries at ~52%
+// acceptance leaves a fallback probability of ~2^-34 per draw.
+
+use vec::{Vec3};
+use rng::{Rand, rand_sym};
+
+pub struct VecRand {
+    v: Vec3;
+    seed: i64;
+}
+
+// Uniform unit vector: rejection-sample the unit ball, then normalize.
+pub fn unit_vec(s: i64) -> VecRand {
+    const ONE: i64 = 1048576;
+    const LSQ_MIN: i64 = 1024;
+    const Z: i64 = 0;
+    let mut seed: i64 = s;
+    let mut out: Vec3 = Vec3 { x: 0, y: 1048576, z: 0 };
+    let mut found: bool = false;
+    let mut i: i32 = 0;
+    loop i < 32 {
+        if !found {
+            let rx: Rand = rand_sym(seed);
+            let ry: Rand = rand_sym(rx.seed);
+            let rz: Rand = rand_sym(ry.seed);
+            seed = rz.seed;
+            let p: Vec3 = Vec3 { x: rx.value, y: ry.value, z: rz.value };
+            let lsq: i64 = p.lensq();
+            if lsq > LSQ_MIN {
+                if lsq <= ONE {
+                    let u: Vec3 = p.unit();
+                    out = u;
+                    found = true;
+                }
+            }
+        }
+        i = i + 1;
+    }
+    return VecRand { v: out, seed: seed };
+}
+
+// Uniform point in the unit disk (z = 0), for defocus lens sampling.
+pub fn unit_disk(s: i64) -> VecRand {
+    const ONE: i64 = 1048576;
+    let mut seed: i64 = s;
+    let mut out: Vec3 = Vec3 { x: 0, y: 0, z: 0 };
+    let mut found: bool = false;
+    let mut i: i32 = 0;
+    loop i < 32 {
+        if !found {
+            let rx: Rand = rand_sym(seed);
+            let ry: Rand = rand_sym(rx.seed);
+            seed = ry.seed;
+            let p: Vec3 = Vec3 { x: rx.value, y: ry.value, z: 0 };
+            let lsq: i64 = p.lensq();
+            if lsq < ONE {
+                out = p;
+                found = true;
+            }
+        }
+        i = i + 1;
+    }
+    return VecRand { v: out, seed: seed };
+}

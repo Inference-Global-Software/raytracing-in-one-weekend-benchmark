@@ -1,0 +1,240 @@
+// Ray Tracing in One Weekend (book v4) in Inference — entry module.
+//
+// ABI (unchanged from the June 2026 renderer, so one driver runs both):
+//   render_pixel(px, py, width, height, samples, depth, scene) -> i64
+//       packed colour 0x00RRGGBB; scene 0 = showcase, 1 = book final scene.
+//   abi_version() -> i64   (2 = this renderer)
+//
+// The sample and bounce loops, and the nearest-hit scan, are inlined here
+// rather than factored into functions: the 506-slot scene grid lives in this
+// frame, and Inference passes compounds by value against a 64 KB analyzed
+// stack budget (A036) — handing the grid to a callee would copy all 40 KB of
+// it per call. Everything that operates on O(1) data (vector algebra, camera,
+// materials, sampling, RNG, fixed-point) lives in the other modules.
+//
+// The book's recursive ray_color becomes a bounded loop (recursion is
+// rejected by analysis rule A035) threading a throughput product: on a miss
+// the sky colour times the throughput is the sample's colour; on scatter the
+// throughput multiplies by the material attenuation; absorption or running
+// out of bounces leaves black.
+
+use fx::{fixmul, fixdiv, fixsqrt, clamp};
+use vec::{Vec3};
+use rng::{seed_for};
+use camera::{Camera, RayRand, make_camera, get_ray};
+use materials::{HitRec, Scatter, scatter};
+use scene::{Sphere, zero_sphere, grid_row, hero_row};
+
+pub fn abi_version() -> i64 {
+    let v: i64 = 2;
+    return v;
+}
+
+pub fn render_pixel(px: i64, py: i64, width: i64, height: i64,
+                    samples: i64, depth: i64, scene: i64) -> i64 {
+    const F: i64 = 20;
+    const ONE: i64 = 1048576;
+    const Z: i64 = 0;
+    const U: i64 = 1;
+    const T_MIN: i64 = 1049;             // 0.001
+    const BIG: i64 = 1099511627776;      // 2^40
+    const SEL_FINAL: i64 = 1;
+    const CMAX: i64 = 1047527;           // 0.999
+    const SH16: i64 = 16;
+    const SH8: i64 = 8;
+
+    // Degenerate-argument guard: zero samples or a zero dimension would
+    // reach an i64 division below; answer black instead of trapping.
+    if samples <= Z {
+        return Z;
+    }
+    if width <= Z {
+        return Z;
+    }
+    if height <= Z {
+        return Z;
+    }
+
+    let w_fx: i64 = width << F;
+    let h_fx: i64 = height << F;
+
+    // Camera parameters. Showcase: the classic origin view (vfov 90,
+    // tan 45 deg = 1, focus 1.0, defocus half-angle 2 deg). Final scene:
+    // the book's cover camera — lookfrom (13,2,3), lookat origin, vfov 20
+    // (tan 10 deg), focus 10, defocus cone 0.6 deg (tan of half-angle 0.3).
+    let mut lf: Vec3 = Vec3 { x: 0, y: 0, z: 0 };
+    let mut la: Vec3 = Vec3 { x: 0, y: 0, z: -1048576 };
+    let mut htan: i64 = 1048576;
+    let mut focusv: i64 = 1048576;
+    let mut dtanv: i64 = 36617;
+    if scene == SEL_FINAL {
+        lf = Vec3 { x: 13631488, y: 2097152, z: 3145728 };
+        la = Vec3 { x: 0, y: 0, z: 0 };
+        htan = 184892;
+        focusv = 10485760;
+        dtanv = 5490;
+    }
+    let vupv: Vec3 = Vec3 { x: 0, y: 1048576, z: 0 };
+    let cam: Camera = make_camera(lf, la, vupv, htan, focusv, dtanv, w_fx, h_fx);
+
+    // Scene grid: rows 0..21 the random field (final scene only), row 22 the
+    // fixed spheres. Built once per pixel; ~0.03% of the per-pixel work.
+    let zsp: Sphere = zero_sphere();
+    let zrow: [Sphere; 22] = [zsp, zsp, zsp, zsp, zsp, zsp, zsp, zsp, zsp,
+                              zsp, zsp, zsp, zsp, zsp, zsp, zsp, zsp, zsp,
+                              zsp, zsp, zsp, zsp];
+    let mut grid: [[Sphere; 22]; 23] = [zrow, zrow, zrow, zrow, zrow, zrow,
+                                        zrow, zrow, zrow, zrow, zrow, zrow,
+                                        zrow, zrow, zrow, zrow, zrow, zrow,
+                                        zrow, zrow, zrow, zrow, zrow];
+    if scene == SEL_FINAL {
+        let mut gi: i32 = 0;
+        let mut ga: i64 = -11;
+        loop gi < 22 {
+            let grow: [Sphere; 22] = grid_row(ga);
+            grid[gi] = grow;
+            gi = gi + 1;
+            ga = ga + U;
+        }
+    }
+    let hrow: [Sphere; 22] = hero_row(scene);
+    grid[22] = hrow;
+
+    // ------------------------------------------------------------- sampling
+    let mut acc: Vec3 = Vec3 { x: 0, y: 0, z: 0 };
+    let mut sidx: i64 = 0;
+    loop sidx < samples {
+        let sseed: i64 = seed_for(px, py, sidx);
+        let rr0: RayRand = get_ray(cam, px, py, sseed);
+        let mut seed: i64 = rr0.seed;
+        let mut cur_o: Vec3 = rr0.orig;
+        let mut cur_d: Vec3 = rr0.dir;
+        let mut thr: Vec3 = Vec3 { x: 1048576, y: 1048576, z: 1048576 };
+        let mut col: Vec3 = Vec3 { x: 0, y: 0, z: 0 };
+        let mut dep: i64 = 0;
+        let mut done: bool = false;
+
+        loop dep < depth {
+            if !done {
+                let ox0: i64 = cur_o.x;
+                let oy0: i64 = cur_o.y;
+                let oz0: i64 = cur_o.z;
+                let dx0: i64 = cur_d.x;
+                let dy0: i64 = cur_d.y;
+                let dz0: i64 = cur_d.z;
+
+                // Nearest-hit scan. cur_d is unit, so the quadratic's a = 1:
+                // t^2 - 2 h t + c = 0 with h = d.oc, c = |oc|^2 - r^2, and
+                // the roots are h -/+ sqrt(h^2 - c). oc = center - origin
+                // (the v4 sign convention). Raw-sum dots are safe here:
+                // |d| = 1 and |oc| <= ~1100 keep the sums under 2^62.
+                let mut closest: i64 = BIG;
+                let mut bi: i32 = 0;
+                let mut bj: i32 = 0;
+                let mut bhit: bool = false;
+                let mut si: i32 = 0;
+                loop si < 23 {
+                    let mut sj: i32 = 0;
+                    loop sj < 22 {
+                        let rad: i64 = grid[si][sj].radius;
+                        if rad > Z {
+                            let ocx: i64 = grid[si][sj].cx - ox0;
+                            let ocy: i64 = grid[si][sj].cy - oy0;
+                            let ocz: i64 = grid[si][sj].cz - oz0;
+                            let hb: i64 = (dx0 * ocx + dy0 * ocy + dz0 * ocz) >> F;
+                            let ocl: i64 = (ocx * ocx + ocy * ocy + ocz * ocz) >> F;
+                            let cc: i64 = ocl - grid[si][sj].rr;
+                            let disc: i64 = fixmul(hb, hb) - cc;
+                            if disc >= Z {
+                                let sq: i64 = fixsqrt(disc);
+                                let mut root: i64 = hb - sq;
+                                let in1: bool = (root > T_MIN) && (root < closest);
+                                if !in1 {
+                                    root = hb + sq;
+                                }
+                                let in2: bool = (root > T_MIN) && (root < closest);
+                                if in2 {
+                                    closest = root;
+                                    bi = si;
+                                    bj = sj;
+                                    bhit = true;
+                                }
+                            }
+                        }
+                        sj = sj + 1;
+                    }
+                    si = si + 1;
+                }
+
+                if !bhit {
+                    // Sky: blend white -> (0.5, 0.7, 1.0) on unit dir y.
+                    const SKY_R: i64 = 524288;
+                    const SKY_G: i64 = 734003;
+                    let a_t: i64 = (dy0 + ONE) >> U;
+                    let omt: i64 = ONE - a_t;
+                    let skyv: Vec3 = Vec3 { x: omt + fixmul(a_t, SKY_R),
+                                            y: omt + fixmul(a_t, SKY_G),
+                                            z: omt + a_t };
+                    let lit: Vec3 = thr.mul(skyv);
+                    col = lit;
+                    done = true;
+                } else {
+                    let ws: Sphere = grid[bi][bj];
+                    let t_hit: i64 = closest;
+                    let pd: Vec3 = cur_d.scale(t_hit);
+                    let hp: Vec3 = cur_o.add(pd);
+                    // Outward normal by exact division: (p - c) / r.
+                    let nx: i64 = fixdiv(hp.x - ws.cx, ws.radius);
+                    let ny: i64 = fixdiv(hp.y - ws.cy, ws.radius);
+                    let nz: i64 = fixdiv(hp.z - ws.cz, ws.radius);
+                    let dn: i64 = (dx0 * nx + dy0 * ny + dz0 * nz) >> F;
+                    let ff: bool = dn < Z;
+                    let mut nrm: Vec3 = Vec3 { x: nx, y: ny, z: nz };
+                    if !ff {
+                        let flip: Vec3 = nrm.neg();
+                        nrm = flip;
+                    }
+                    let hrec: HitRec = HitRec {
+                        p: hp, normal: nrm, t: t_hit, front: ff, mat: ws.mat,
+                        albedo: Vec3 { x: ws.ar, y: ws.ag, z: ws.ab },
+                        fuzz_or_ir: ws.fuzz_or_ir };
+                    let sc: Scatter = scatter(cur_d, hrec, seed);
+                    seed = sc.seed;
+                    if !sc.ok {
+                        col = Vec3 { x: 0, y: 0, z: 0 };
+                        done = true;
+                    } else {
+                        let satt: Vec3 = sc.att;
+                        let nthr: Vec3 = thr.mul(satt);
+                        thr = nthr;
+                        let sorig: Vec3 = sc.orig;
+                        let sdir: Vec3 = sc.dir;
+                        cur_o = sorig;
+                        cur_d = sdir;
+                    }
+                }
+            }
+            dep = dep + U;
+        }
+
+        let nacc: Vec3 = acc.add(col);
+        acc = nacc;
+        sidx = sidx + U;
+    }
+
+    // Average, gamma 2 (sqrt of linear), clamp to 0.999, 8 bits per channel.
+    let samples_fx: i64 = samples << F;
+    let avr: i64 = fixdiv(acc.x, samples_fx);
+    let avg: i64 = fixdiv(acc.y, samples_fx);
+    let avb: i64 = fixdiv(acc.z, samples_fx);
+    let gr: i64 = fixsqrt(avr);
+    let gg: i64 = fixsqrt(avg);
+    let gb: i64 = fixsqrt(avb);
+    let cr: i64 = clamp(gr, Z, CMAX);
+    let cg: i64 = clamp(gg, Z, CMAX);
+    let cb: i64 = clamp(gb, Z, CMAX);
+    let br: i64 = (cr << SH8) >> F;
+    let bg: i64 = (cg << SH8) >> F;
+    let bb: i64 = (cb << SH8) >> F;
+    return (br << SH16) | (bg << SH8) | bb;
+}

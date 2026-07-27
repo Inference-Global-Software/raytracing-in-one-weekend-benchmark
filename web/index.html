@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Ray Tracing in One Weekend — in Inference</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='7' fill='%234493f8'/%3E%3Ccircle cx='5.5' cy='5.5' r='2' fill='%23bcdcff'/%3E%3C/svg%3E" />
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header>
+    <h1>Ray Tracing in One Weekend</h1>
+    <p class="sub">Rendered by a path tracer written entirely in the
+      <strong>Inference</strong> language (fixed-point Q20.20, compiled to WebAssembly).
+      JavaScript only paints the pixels.</p>
+  </header>
+
+  <main>
+    <section class="stage">
+      <div class="canvas-wrap">
+        <canvas id="view" width="1920" height="1080"></canvas>
+        <div id="overlay" class="overlay hidden"></div>
+      </div>
+      <div class="bar">
+        <progress id="prog" max="100" value="0"></progress>
+        <span id="status">idle</span>
+      </div>
+    </section>
+
+    <section class="controls">
+      <div class="ctl">
+        <label for="scene">Scene</label>
+        <select id="scene">
+          <option value="0">Showcase — 3 materials + defocus</option>
+          <option value="1">Final scene — many spheres (slow)</option>
+        </select>
+      </div>
+
+      <div class="ctl">
+        <label for="samples">Samples / pixel <output id="samplesOut">16</output></label>
+        <input id="samples" type="range" min="1" max="128" value="16" />
+      </div>
+
+      <div class="ctl">
+        <label for="depth">Max bounces <output id="depthOut">16</output></label>
+        <input id="depth" type="range" min="1" max="50" value="16" />
+      </div>
+
+      <div class="ctl">
+        <label for="rscale">Render scale <output id="rscaleOut">1</output>×</label>
+        <input id="rscale" type="range" min="1" max="8" value="2" />
+        <small>Higher = faster preview (renders 1 of N pixels, fills blocks).</small>
+      </div>
+
+      <div class="ctl row">
+        <button id="render" class="primary">Render</button>
+        <button id="stop" disabled>Stop</button>
+      </div>
+
+      <p class="note" id="abi"></p>
+    </section>
+  </main>
+
+  <footer>
+    <span>All ray-tracing logic is Inference → WASM. Source: <code>src/*.inf</code>,
+      compiled to one self-contained module.</span>
+  </footer>
+
+  <script type="module" src="render.js"></script>
+</body>
+</html>

@@ -1,0 +1,113 @@
+// Q20.20 signed fixed-point kernel (ONE = 1.0 = 1048576 = 2^20), all in i64.
+//
+// Q20.20 was chosen as the finest format that survives the book's final scene:
+// the ground sphere sits at (0,-1000,0) with radius 1000, so |oc| reaches
+// ~1030 world units and a squared term (1030 * 2^f)^2 must fit in i64 —
+// f = 20 leaves an 8x margin, f = 21 overflows. Resolution is 2^-20 ~ 9.5e-7,
+// a 16x improvement over the June 2026 renderer's Q16.16.
+//
+// Division uses the native `/` operator (wasm i64.div_s) throughout; the old
+// toolchain had no `/` and linked an external Newton-iteration kernel instead.
+//
+// Domain contracts (callers keep values in range; none of these guard):
+//   fixmul(a, b)  requires |a*b| < 2^63          (|values| product < 2^23)
+//   fixdiv(a, b)  requires |a| < 2^23 * ONE, b != 0
+//   recip(b)      requires b != 0
+
+pub fn fixmul(a: i64, b: i64) -> i64 {
+    const F: i64 = 20;
+    return (a * b) >> F;
+}
+
+pub fn fixdiv(a: i64, b: i64) -> i64 {
+    const F: i64 = 20;
+    return (a << F) / b;
+}
+
+// 1.0 / b in Q20.20: (1 << 40) / b.
+pub fn recip(b: i64) -> i64 {
+    const ONE_SQ: i64 = 1099511627776;
+    return ONE_SQ / b;
+}
+
+pub fn fabs(x: i64) -> i64 {
+    const Z: i64 = 0;
+    if x < Z {
+        return Z - x;
+    }
+    return x;
+}
+
+pub fn fmin(a: i64, b: i64) -> i64 {
+    if a < b {
+        return a;
+    }
+    return b;
+}
+
+pub fn fmax(a: i64, b: i64) -> i64 {
+    if a > b {
+        return a;
+    }
+    return b;
+}
+
+pub fn clamp(x: i64, lo: i64, hi: i64) -> i64 {
+    if x < lo {
+        return lo;
+    }
+    if x > hi {
+        return hi;
+    }
+    return x;
+}
+
+// floor(sqrt(x)) in Q20.20 for x >= 0: integer sqrt of (x << 20).
+//
+// Seed g is a power of two in [sqrt(n), 2*sqrt(n)) found by quartering n,
+// then Newton's method with the native division converges quadratically:
+// six iterations suffice from a within-2x seed for any n < 2^63. The final
+// decrement loop lands exactly on the floor (Newton with integer division
+// can settle one above it).
+//
+// Domain: x < 2^43 (renderer inputs are squared lengths <= ~1.1e6 * ONE);
+// larger inputs are clamped to the domain edge rather than wrapping in the
+// n = x << 20 pre-shift.
+pub fn fixsqrt(x: i64) -> i64 {
+    const Z: i64 = 0;
+    const U: i64 = 1;
+    const S2: i64 = 2;
+    const F: i64 = 20;
+    const XMAX: i64 = 8796093022207;
+    if x <= Z {
+        return Z;
+    }
+    let mut xc: i64 = x;
+    if xc > XMAX {
+        xc = XMAX;
+    }
+    let n: i64 = xc << F;
+    let mut g: i64 = 1;
+    let mut v: i64 = n;
+    loop v > U {
+        v = v >> S2;
+        g = g << U;
+    }
+    let mut i: i32 = 0;
+    loop i < 6 {
+        let ng: i64 = (g + n / g) >> U;
+        g = ng;
+        i = i + 1;
+    }
+    loop g * g > n {
+        g = g - U;
+    }
+    return g;
+}
+
+// (1 - cos)^5 for the Schlick approximation; x in [0, ONE].
+pub fn pow5(x: i64) -> i64 {
+    let x2: i64 = fixmul(x, x);
+    let x4: i64 = fixmul(x2, x2);
+    return fixmul(x4, x);
+}

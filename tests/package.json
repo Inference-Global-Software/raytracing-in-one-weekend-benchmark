@@ -1,0 +1,14 @@
+{
+  "name": "raytracing-in-one-weekend-tests",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Playwright smoke + screenshot tests for the Inference ray tracer web harness.",
+  "scripts": {
+    "test": "playwright test",
+    "install-browsers": "playwright install chromium"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.48.0",
+    "http-server": "^14.1.1"
+  }
+}
