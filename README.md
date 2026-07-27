@@ -73,8 +73,8 @@ tools/downscale.mjs 2x2 box downscale in linear light (supersampled renders)
 bench/             benchmark matrix, ledger (history.jsonl), saved results
 web/               browser viewer (unchanged ABI)
 tests/             Playwright smoke test for the web viewer
-assets/            README figures (phantom-glow comparison)
-out/               build output + preserved renders (incl. defective *-be1d239.png)
+assets/            README figures (image-identity comparison)
+out/               build output + preserved renders (incl. be1d239 versions)
 ```
 
 ## ABI (unchanged from v1 — one driver runs both)
@@ -117,32 +117,30 @@ which builds the renderer, records size/build-time/throughput, and — when
 so every row carries a same-conditions baseline instead of a stale absolute
 number. Preserved modules live in `bench/modules/`.
 
-### The image-identity canary, and the bug it caught
+### The image-identity canary
 
-Each ledger row includes the SHA-256 of a small deterministic render. It
-changes only when codegen *semantics* change — and it has already earned its
-keep. Modules built before Inference PR
-[#302](https://github.com/Inferara/inference/pull/302) carried a real image
-defect: the compiler skipped re-zeroing loop-scoped compound literals, so the
-per-sample radiance accumulator inherited the previous sample's color, and
-every path that ran out of bounces returned leftover light instead of black.
+Each ledger row includes the SHA-256 of a small deterministic render — a value
+that moves only when codegen *semantics* do. When it changes between two
+toolchain snapshots, the rendered image changed too; what changed in the
+compiler is in its own git history between those commits.
 
-| be1d239 (before) | 4f6738a (fixed) | difference ×8 |
+It has already moved once. Toolchains `be1d239` and `4f6738a` render this scene
+differently:
+
+| be1d239 | 4f6738a | difference ×8 |
 |---|---|---|
-| ![old](assets/phantom-glow-be1d239.png) | ![fixed](assets/phantom-glow-fixed.png) | ![diff](assets/phantom-glow-diff.png) |
+| ![be1d239](assets/identity-be1d239.png) | ![4f6738a](assets/identity-4f6738a.png) | ![diff](assets/identity-diff.png) |
 
-At 2000 spp / depth 50 the leak touched **34.1 % of pixels** — and the
-divergence is strictly one-sided (of 9.72 M channel values, zero got brighter
-after the fix): the old render's extra bokeh glow was phantom light, not light
-transport. Throughput cost of the fix: none. The full-frame difference map
-shows exactly where paths exhaust the bounce budget — every out-of-focus
-sphere glows with its smeared contact-shadow trap, and the hero spheres show
-grazing-angle rims:
+At 2000 spp / depth 50 the two differ across **34.1 % of pixels**, strictly
+one-sided (of 9.72 M channel values, none are brighter under `4f6738a`), at no
+throughput cost. Full-frame difference, amplified ×8:
 
-![where the phantom light lived](assets/phantom-glow-heatmap.png)
+![full-frame difference](assets/identity-heatmap.png)
 
-The defective originals are kept in `out/*-be1d239.png` for history; full
-analysis in [`bench/RESULTS.md`](bench/RESULTS.md).
+The `be1d239` renders are preserved in `out/*-be1d239.png`; measured deltas are
+in [`bench/RESULTS.md`](bench/RESULTS.md), and the compiler changes between the
+two toolchains are at
+[`Inferara/inference@be1d239...4f6738a`](https://github.com/Inferara/inference/compare/be1d239...4f6738a).
 
 ## License
 

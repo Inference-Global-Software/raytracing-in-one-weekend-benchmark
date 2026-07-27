@@ -69,48 +69,39 @@ showcase deltas under ~30% as JIT fortune, and trust the final-scene column.
 - Raw JSON for every run (wasm SHA-256, host, toolchain commit, timings):
   `bench/results/*.json`. Reproduce: `bash bench/run.sh`.
 
-# 2026-07-27 — toolchain 4f6738a (post codegen-audit, Inferara/inference PRs #301–#311)
+# 2026-07-27 — toolchain be1d239 → 4f6738a
 
-Same source (modulo one comment), rebuilt with the toolchain that carries the
-eleven codegen-audit fixes. Ledger row + protocol: `bench/history.jsonl`,
-appended via `bench/snapshot.sh` (which also re-benchmarks a preserved
-reference module interleaved, so every row carries a same-conditions
-baseline). Preserved modules live in `bench/modules/`.
+Same source (modulo one comment), rebuilt across two toolchain snapshots.
+Ledger row + protocol: `bench/history.jsonl`, appended via `bench/snapshot.sh`
+(which also re-benchmarks a preserved reference module interleaved, so every
+row carries a same-conditions baseline). Preserved modules live in
+`bench/modules/`. What changed in the compiler between the two commits is at
+[`Inferara/inference@be1d239...4f6738a`](https://github.com/Inferara/inference/compare/be1d239...4f6738a).
 
-## Image correctness: every pre-#302 render was subtly wrong
+## The image changed between the two toolchains
 
-The old module carried a real image defect inherited from a compiler bug
-([Inferara/inference#302](https://github.com/Inferara/inference/pull/302), loop-scoped compound literals not re-zeroed): the per-sample
-radiance accumulator `col` in `render_pixel` was initialized `{0,0,0}` only on
-the first sample; samples 2+ started from the previous sample's final color,
-which leaked stale brightness into any ray that exhausted its bounce budget.
+The image-identity hash moved between these snapshots. At spp=1 the two modules
+render **byte-identical** images; at spp≥2 they diverge, and the gap widens with
+sample count and depth. Measured:
 
-Proof of mechanism: at spp=1 the two modules render **byte-identical** images
-(first iteration sees the zeroed frame); at spp≥2 they diverge. At the
-benchmark settings (320×180, spp 8, depth 16) the defect touched 17.05% of
-final-scene pixels (max channel delta 150) and 2.36% of showcase pixels.
-The image-identity hash in each ledger row is the regression canary for
-exactly this class of bug.
+| workload | pixels differing | max channel Δ |
+|---|---|---|
+| 320×180, spp 8, depth 16, showcase | 2.36% | — |
+| 320×180, spp 8, depth 16, final | 17.05% | 150 |
+| 2400×1350, spp 2000, depth 50, final | 34.1% (mean Δ14.2, RMS 25.4) | 146 |
+
+The divergence is **strictly one-sided**: across all 9.72 M channel values of
+the HQ frame, none are brighter under `4f6738a`. The `be1d239` renders are
+preserved for comparison (`out/*-be1d239.png`).
 
 ## HQ artifact re-render (2026-07-27)
 
-`out/final-hq-2400.png` + `out/final-hq.png` re-rendered with the corrected
-module, same settings (2400×1350, 2000 spp, depth 50, 17 threads): 4,079.75 s
-wall, 1,588.3 ksamples/s sustained (be1d239 run: 4,017.8 s / 1,610 ks/s —
-parity within 1.5% at thermal steady state). The be1d239 originals are kept as
+`out/final-hq-2400.png` + `out/final-hq.png` re-rendered under `4f6738a`, same
+settings (2400×1350, 2000 spp, depth 50, 17 threads): 4,079.75 s wall,
+1,588.3 ksamples/s sustained (be1d239 run: 4,017.8 s / 1,610 ks/s — parity
+within 1.5% at thermal steady state). Originals kept as
 `out/final-hq-2400-be1d239.png` / `out/final-hq-be1d239.png`; run records in
 `bench/results/v2-final-hq-2400x1350-2000spp-17t{,-4f6738a}.json`.
-
-The defect was NOT marginal at depth 50 (an earlier note here guessed it
-would be): **34.1% of pixels differ** (mean channel delta 14.2, RMS 25.4,
-max 146 on differing pixels). The divergence is **strictly one-sided** —
-across all 9.72 M channel values, zero are brighter in the corrected render —
-i.e. the old image contained only *added* phantom light, concentrated where
-paths exhaust the 50-bounce budget: sphere/ground contact traps smeared into
-every out-of-focus bokeh blob by defocus blur, and grazing/TIR rims on the
-two hero spheres. The old render's extra "glow" was leak, not light
-transport; the corrected render's darker bokeh and contact shadows are the
-true values.
 
 ## Size and speed
 
@@ -122,12 +113,5 @@ true values.
 | final scene 1t | 272.3 | 275.6 ksps | noise |
 | final scene 16t | 2957.2 | 2955.3 ksps | noise |
 
-(Speed = best-of-3, interleaved, load < 6; both modules measured 2026-07-27.)
-
-The +49 B decomposes into the #302 zero stores (scene/sample loops — the
-correctness fix above) and one short-circuit valued-if (Inferara/inference#309)
-in the dielectric
-`||`. The hot-path `&&` sites in the sphere-hit scan also lower short-circuit
-now, but Binaryen -Os folds pure-compare valued-ifs back to branchless
-`i32.and` — the shipped hot loop is byte-equivalent, which is why throughput
-is flat. Build wall time: 0.08 s (compile + wasm-opt).
+(Speed = best-of-3, interleaved, load < 6; both modules measured 2026-07-27.
+Build wall time under `4f6738a`: 0.08 s, compile + wasm-opt.)
