@@ -4,6 +4,9 @@ version = "0.2.0"
 infc_version = "0.1.0"
 description = "Ray Tracing in One Weekend (book v4) in Inference, Q20.20 fixed point"
 
+[build]
+wasm-features = ["bulk-memory"]
+
 [build.wasm-opt]
 enabled = true
 level = "s"
