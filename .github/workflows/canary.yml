@@ -74,8 +74,12 @@ jobs:
       - name: Install wasm-opt
         run: '"$INFS" component add wasm-opt'
 
+      # Removed first so the checks below can only ever see this build's
+      # output, never the committed file.
       - name: Build
-        run: '"$INFS" build'
+        run: |
+          rm -f out/main.wasm
+          "$INFS" build
 
       - name: Image identity matches the ledger
         run: |
