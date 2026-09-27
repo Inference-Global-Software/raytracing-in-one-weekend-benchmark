@@ -132,6 +132,14 @@ that moves only when codegen *semantics* do. When it changes between two
 toolchain snapshots, the rendered image changed too; what changed in the
 compiler is in its own git history between those commits.
 
+CI ([`.github/workflows/canary.yml`](.github/workflows/canary.yml)) builds
+the renderer with two released toolchains — the one the latest ledger row was
+taken with, and the newest release — and fails if either renders a different
+image. Under the ledger's toolchain it also requires the committed
+`out/main.wasm` and `web/main.wasm` to be exactly what `src/` builds to. It runs
+on every push and pull request and weekly, so a new release that breaks this
+source or changes its image shows up without anyone rebuilding by hand.
+
 It has already moved once. Toolchains `be1d239` and `4f6738a` render this scene
 differently:
 

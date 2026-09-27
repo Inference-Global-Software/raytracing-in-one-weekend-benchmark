@@ -1,0 +1,142 @@
+name: Toolchain canary
+
+# Builds the renderer with released Inference toolchains and checks that it
+# still renders the image the ledger records. Two toolchains per run:
+#
+#   ledger  the release the latest bench/history.jsonl row was taken with;
+#           the committed out/main.wasm and web/main.wasm must be exactly
+#           what it builds from src/
+#   latest  the newest published release; the weekly run is what notices a
+#           release that stops building this source or changes its image
+#
+# Throughput on hosted runners is too noisy to compare, so it is reported in
+# the job summary and never fails the run. Ledger rows come from
+# bench/snapshot.sh on a settled machine.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  canary:
+    name: canary (${{ matrix.toolchain }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        toolchain: [ledger, latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Resolve the release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "${{ matrix.toolchain }}" = ledger ]; then
+            tag="v$(tail -n 1 bench/history.jsonl | jq -r .toolchain_version)"
+          else
+            tag=$(gh release view -R Inferara/inference --json tagName -q .tagName)
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Toolchain: $tag"
+
+      - name: Install infs and infc
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          dir="$RUNNER_TEMP/inference"
+          mkdir -p "$dir" && cd "$dir"
+          gh release download "$TAG" -R Inferara/inference \
+            -p 'infs-linux-x64.tar.gz*' -p 'infc-linux-x64.tar.gz*'
+          sha256sum -c infs-linux-x64.tar.gz.sha256 infc-linux-x64.tar.gz.sha256
+          mkdir infs infc
+          tar xzf infs-linux-x64.tar.gz -C infs
+          tar xzf infc-linux-x64.tar.gz -C infc
+          echo "INFS=$dir/infs/infs" >> "$GITHUB_ENV"
+          echo "INFC_PATH=$dir/infc/infc" >> "$GITHUB_ENV"
+          infs/infs --version
+          infc/infc --version
+          infc/infc --commit-hash
+
+      - name: Install wasm-opt
+        run: '"$INFS" component add wasm-opt'
+
+      - name: Build
+        run: '"$INFS" build'
+
+      - name: Image identity matches the ledger
+        run: |
+          expected=$(tail -n 1 bench/history.jsonl | jq -r .identity_sha256)
+          actual=$(bash bench/identity.sh out/main.wasm)
+          echo "expected $expected"
+          echo "actual   $actual"
+          if [ "$actual" != "$expected" ]; then
+            echo "::error::The image-identity hash differs from the latest ledger row: this toolchain renders a different image."
+            exit 1
+          fi
+
+      - name: Committed modules are this build
+        if: matrix.toolchain == 'ledger'
+        run: |
+          if ! git diff --quiet -- out/main.wasm; then
+            echo "::error::out/main.wasm is not what src/ builds to under the ledger toolchain; rebuild and commit it."
+            exit 1
+          fi
+          if ! cmp -s out/main.wasm web/main.wasm; then
+            echo "::error::web/main.wasm differs from out/main.wasm; copy the build over it."
+            exit 1
+          fi
+
+      - name: Throughput (informational)
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          node tools/render.mjs --wasm out/main.wasm --out "$RUNNER_TEMP/fin.png" \
+            --width 320 --height 180 --scene 1 --spp 8 --depth 16 --threads 1 \
+            | tee "$RUNNER_TEMP/fin.log"
+          {
+            echo "### $TAG on $(nproc) vCPU"
+            echo
+            echo "Final scene, 320x180, 8 spp, depth 16, 1 thread: $(grep -o '[0-9.]* ksamples/s' "$RUNNER_TEMP/fin.log")."
+            echo "Hosted-runner numbers are not comparable with the ledger."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  web:
+    name: web viewer
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install Playwright
+        working-directory: tests
+        run: |
+          npm install --no-audit --no-fund
+          npx playwright install --with-deps chromium
+
+      - name: Smoke test
+        working-directory: tests
+        run: npx playwright test
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: web-viewer-screenshot
+          path: tests/test-results/
+          if-no-files-found: ignore
