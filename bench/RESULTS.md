@@ -115,3 +115,58 @@ within 1.5% at thermal steady state). Originals kept as
 
 (Speed = best-of-3, interleaved, load < 6; both modules measured 2026-07-27.
 Build wall time under `4f6738a`: 0.08 s, compile + wasm-opt.)
+
+# 2026-09-27 — toolchain dafdfb7 → v0.0.6 (4deba32)
+
+The first row taken with a released toolchain: `infs` and `infc`
+[v0.0.6](https://github.com/Inferara/inference/releases/tag/v0.0.6), macOS
+Apple Silicon archives. The source needed two edits to build and run under it:
+
+- `Vec3::unit()` is now `unit_vector()`, because v0.0.6 reserves `unit`.
+- splitmix64's three add/multiply sites are written `wrapping(...)`. v0.0.6
+  makes an unmarked `+`, `-` or `*` trap on overflow, and splitmix64 is
+  arithmetic modulo 2^64 by design; unmarked, the module traps
+  (`RuntimeError: unreachable`).
+
+Every other operation in the renderer now runs checked. The image did not
+change: the identity hash is the dafdfb7 row's, and at 1200×675, 16 spp,
+depth 50 neither scene traps and the final-scene render is byte-identical to
+the dafdfb7 module's.
+
+## Size and speed
+
+|  | dafdfb7 | v0.0.6 | delta |
+|---|---|---|---|
+| wasm pre-opt | 14,976 B | 17,853 B | +2,877 B |
+| wasm shipped (-Os) | 9,171 B | 11,275 B | +2,104 B (+22.9%) |
+| showcase 1t | 627.8 | 567.8 ksps | −9.6% |
+| final scene 1t | 281.0 | 79.6 ksps | −71.7% |
+| final scene 16t | 3016.1 | 963.1 ksps | −68.1% |
+
+(Speed = best-of-3, interleaved, load 3.9; both modules measured 2026-09-27.
+Build wall time under v0.0.6: 0.09 s, compile + wasm-opt.)
+
+The compiler changes between the two toolchains are at
+[`Inferara/inference@dafdfb7...4deba32`](https://github.com/Inferara/inference/compare/dafdfb7...4deba32).
+`dafdfb7` is the head of the #335 pull-request branch rather than a commit on
+`main`; #335 landed as `5e90a48` + `9106d66`, so the comparison runs from
+their merge-base, `1534b5a`.
+
+## Source revision under the same toolchain
+
+A second v0.0.6 row (module `4deba32-cleanup`) measures the source after it
+dropped workarounds the language no longer needs: constants named after their
+own value, field copies, `found`/`done` loop flags, and the nearest-hit scan
+inlined into `render_pixel` (it is now a function whose grid parameter is
+passed by reference, with a 128 KiB `[memory]` stack). Identity unchanged; both
+scenes also render byte-identical at 1200×675 and 320×180, depth 50.
+
+|  | 4deba32 | 4deba32-cleanup | delta |
+|---|---|---|---|
+| wasm pre-opt | 17,853 B | 17,309 B | −544 B |
+| wasm shipped (-Os) | 11,275 B | 11,100 B | −175 B |
+| showcase 1t | 575.3 | 566.4 ksps | noise |
+| final scene 1t | 77.6 | 77.6 ksps | noise |
+| final scene 16t | 969.4 | 956.9 ksps | noise |
+
+(Best-of-3, interleaved, load 4.0.)

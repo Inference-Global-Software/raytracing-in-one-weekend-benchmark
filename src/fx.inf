@@ -9,7 +9,9 @@
 // Division uses the native `/` operator (wasm i64.div_s) throughout; the old
 // toolchain had no `/` and linked an external Newton-iteration kernel instead.
 //
-// Domain contracts (callers keep values in range; none of these guard):
+// Domain contracts (callers keep values in range). Outside them an
+// overflowing `*` traps and so does a zero divisor, but shifts are not
+// overflow-checked: fixdiv's pre-shift silently drops high bits.
 //   fixmul(a, b)  requires |a*b| < 2^63          (|values| product < 2^23)
 //   fixdiv(a, b)  requires |a| < 2^23 * ONE, b != 0
 //   recip(b)      requires b != 0
@@ -31,9 +33,8 @@ pub fn recip(b: i64) -> i64 {
 }
 
 pub fn fabs(x: i64) -> i64 {
-    const Z: i64 = 0;
-    if x < Z {
-        return Z - x;
+    if x < 0 {
+        return -x;
     }
     return x;
 }
@@ -74,13 +75,10 @@ pub fn clamp(x: i64, lo: i64, hi: i64) -> i64 {
 // larger inputs are clamped to the domain edge rather than wrapping in the
 // n = x << 20 pre-shift.
 pub fn fixsqrt(x: i64) -> i64 {
-    const Z: i64 = 0;
-    const U: i64 = 1;
-    const S2: i64 = 2;
     const F: i64 = 20;
     const XMAX: i64 = 8796093022207;
-    if x <= Z {
-        return Z;
+    if x <= 0 {
+        return 0;
     }
     let mut xc: i64 = x;
     if xc > XMAX {
@@ -89,18 +87,17 @@ pub fn fixsqrt(x: i64) -> i64 {
     let n: i64 = xc << F;
     let mut g: i64 = 1;
     let mut v: i64 = n;
-    loop v > U {
-        v = v >> S2;
-        g = g << U;
+    loop v > 1 {
+        v = v >> 2;
+        g = g << 1;
     }
     let mut i: i32 = 0;
     loop i < 6 {
-        let ng: i64 = (g + n / g) >> U;
-        g = ng;
+        g = (g + n / g) >> 1;
         i = i + 1;
     }
     loop g * g > n {
-        g = g - U;
+        g = g - 1;
     }
     return g;
 }

@@ -27,12 +27,14 @@ entire renderer is Q20.20 fixed-point arithmetic in `i64`.*
 | Single file + external `.wasm` kernel linked via `[wasm-dependencies]` | **File-based module hierarchy** ([Inferara/inference#63](https://github.com/Inferara/inference/issues/63)): `src/{fx,rng,vec,sample,camera,materials,scene,main}.inf`, `use` imports, one self-contained artifact |
 | No `/` operator — division via a hand-linked Newton-iteration kernel | **Native `/` and `%`** (wasm `i64.div_s`): exact fixed-point division everywhere |
 | No unary minus (`0 - x` workarounds) | Unary `-`, `~` |
-| Free functions only | **Struct methods** (`v.dot(w)`, `p.unit()`, `Type::assoc()`) |
-| No `break`; loops padded to fixed trip counts with `found` flags | `break` (rejection sampling exits early) |
-| Manual `let` for every constant | Fn-local `const` for all scalar types |
+| Free functions only | **Struct methods** (`v.dot(w)`, `p.unit_vector()`, `Type::assoc()`) |
+| No `break`; loops padded to fixed trip counts with `found` flags | `break` (rejection sampling and the bounce loop exit early) |
+| Manual `let` for every constant | **Integer literals typed by context** ([Inferara/inference#219](https://github.com/Inferara/inference/issues/219)): `x < 0`, `clamp(gr, 0, CMAX)`, `return 0;`; fn-local `const` for named values |
 | Whole-array literals only | **Array element writes** (`grid[i][j] = s`), computed indices, 2-D arrays |
 | — | `infs` project mode ([Inferara/inference#222](https://github.com/Inferara/inference/issues/222)): `Inference.toml`, `infs build`, **`[build.wasm-opt]`** post-optimization (Binaryen -Os: 15.5 KB → 9.5 KB; level chosen by measurement, see bench/RESULTS.md) |
 | — | Compiler safety rails: A036 stack-budget analysis, A041 shadowing rejection, dynamic bounds guards |
+| — | **Read-only compound parameters passed by reference** ([Inferara/inference#220](https://github.com/Inferara/inference/issues/220)) and a configurable stack (`[memory]`): the nearest-hit scan is its own function over the 40 KB scene grid |
+| — | **Trapping integer overflow** ([Inferara/inference#316](https://github.com/Inferara/inference/issues/316), v0.0.6): every integer `+`, `-` (binary and unary) and `*` in the renderer traps rather than wraps; splitmix64's three modulo-2^64 sites opt out with `wrapping(...)` |
 
 ## What the renderer itself fixes over v1
 
@@ -49,8 +51,8 @@ entire renderer is Q20.20 fixed-point arithmetic in `i64`.*
   in i64 with masked shifts, seeded per `(px, py, sample)`.
 - **The real book scene**: the 22×22 procedurally generated sphere field with
   the book's material mix (80 % diffuse `rand*rand`, 15 % metal, 5 % glass),
-  ground, and three hero spheres — 400+ live spheres per ray, scanned inline
-  against the analyzed 64 KB stack budget.
+  ground, and three hero spheres — 400+ live spheres per ray, scanned by one
+  function that reads the 40 KB grid by reference.
 - **v4 semantics** end to end: `oc = center − origin` sign convention,
   normalize-then-fuzz metal (draw consumed even at fuzz 0), defocus as a cone
   angle (`radius = focus · tan(defocus/2)`), centered pixel jitter,
@@ -59,7 +61,7 @@ entire renderer is Q20.20 fixed-point arithmetic in `i64`.*
 ## Layout
 
 ```
-Inference.toml     [package] + [build.wasm-opt] level s
+Inference.toml     [package] + [build.wasm-opt] level s + [memory] 128 KiB stack
 src/fx.inf         Q20.20 kernel: fixmul/fixdiv/recip/fixsqrt/clamp/pow5
 src/rng.inf        splitmix64 (i64, masked logical shifts), per-sample seeding
 src/vec.inf        Vec3 methods, cross/reflect/refract
@@ -67,7 +69,7 @@ src/sample.inf     unit-sphere / unit-disk rejection sampling
 src/camera.inf     v4 camera; get_ray returns unit directions
 src/materials.inf  lambertian / metal / dielectric scatter
 src/scene.inf      per-cell-seeded random field + hero/showcase rows
-src/main.inf       entry: render_pixel with the inlined nearest-hit scan
+src/main.inf       entry: render_pixel and the nearest-hit scan
 tools/render.mjs   parallel driver (worker_threads), PNG writer, bench JSON
 tools/downscale.mjs 2x2 box downscale in linear light (supersampled renders)
 bench/             benchmark matrix, ledger (history.jsonl), saved results
@@ -89,6 +91,11 @@ benchmarking), `1` = the book final scene.
 
 ## Build & render
 
+Requires the Inference toolchain
+[v0.0.6](https://github.com/Inferara/inference/releases/tag/v0.0.6) or newer
+(`infs` and `infc`); earlier releases reject `wrapping(...)`. The
+`[build.wasm-opt]` step needs Binaryen: `infs component add wasm-opt`.
+
 ```bash
 infs build                          # or: INFC_PATH=... infs build
 node tools/render.mjs --wasm out/main.wasm --out out/final.png \
@@ -109,20 +116,33 @@ The longitudinal ledger is [`bench/history.jsonl`](bench/history.jsonl):
 one JSON row per compiler snapshot, appended by
 
 ```bash
-TOOLCHAIN_COMMIT=<sha> REF=<prior-commit> bash bench/snapshot.sh
+INFS=<path>/infs INFC_PATH=<path>/infc REF=<prior-module> bash bench/snapshot.sh
 ```
 
-which builds the renderer, records size/build-time/throughput, and — when
-`REF` is set — re-benchmarks that prior module *interleaved* with the new one,
-so every row carries a same-conditions baseline instead of a stale absolute
-number. Preserved modules live in `bench/modules/`.
+which builds the renderer, records the toolchain (`infc --version` and
+`--commit-hash`), size/build-time/throughput, and — when `REF` is set —
+re-benchmarks that prior module *interleaved* with the new one, so every row
+carries a same-conditions baseline instead of a stale absolute number.
+Preserved modules live in `bench/modules/`.
 
 ### The image-identity canary
 
-Each ledger row includes the SHA-256 of a small deterministic render — a value
-that moves only when codegen *semantics* do. When it changes between two
-toolchain snapshots, the rendered image changed too; what changed in the
-compiler is in its own git history between those commits.
+Each ledger row includes the SHA-256 of a small deterministic render
+([`bench/identity.sh`](bench/identity.sh)) — a value that moves only when
+codegen *semantics* do. When it changes between two toolchain snapshots, the
+rendered image changed too; what changed in the compiler is in its own git
+history between those commits. `identity_rgb_sha256` hashes the decoded image
+data and is the same on every host; `identity_sha256` hashes the PNG file,
+whose compressed bytes also depend on the zlib build of the Node that wrote
+it, so compare it only between rows taken with the same Node.
+
+CI ([`.github/workflows/canary.yml`](.github/workflows/canary.yml)) builds
+the renderer with two released toolchains — the one the latest ledger row was
+taken with, and the newest release — and fails if either renders a different
+image. Under the ledger's toolchain it also requires the committed
+`out/main.wasm` and `web/main.wasm` to be exactly what `src/` builds to. It runs
+on every push and pull request and weekly, so a new release that breaks this
+source or changes its image shows up without anyone rebuilding by hand.
 
 It has already moved once. Toolchains `be1d239` and `4f6738a` render this scene
 differently:

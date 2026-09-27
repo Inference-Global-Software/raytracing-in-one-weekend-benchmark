@@ -22,26 +22,20 @@ pub struct VecRand {
 pub fn unit_vec(s: i64) -> VecRand {
     const ONE: i64 = 1048576;
     const LSQ_MIN: i64 = 1024;
-    const Z: i64 = 0;
     let mut seed: i64 = s;
     let mut out: Vec3 = Vec3 { x: 0, y: 1048576, z: 0 };
-    let mut found: bool = false;
     let mut i: i32 = 0;
     loop i < 32 {
-        if !found {
-            let rx: Rand = rand_sym(seed);
-            let ry: Rand = rand_sym(rx.seed);
-            let rz: Rand = rand_sym(ry.seed);
-            seed = rz.seed;
-            let p: Vec3 = Vec3 { x: rx.value, y: ry.value, z: rz.value };
-            let lsq: i64 = p.lensq();
-            if lsq > LSQ_MIN {
-                if lsq <= ONE {
-                    let u: Vec3 = p.unit();
-                    out = u;
-                    found = true;
-                }
-            }
+        let rx: Rand = rand_sym(seed);
+        let ry: Rand = rand_sym(rx.seed);
+        let rz: Rand = rand_sym(ry.seed);
+        seed = rz.seed;
+        let p: Vec3 = Vec3 { x: rx.value, y: ry.value, z: rz.value };
+        let lsq: i64 = p.lensq();
+        if lsq > LSQ_MIN && lsq <= ONE {
+            let u: Vec3 = p.unit_vector();
+            out = u;
+            break;
         }
         i = i + 1;
     }
@@ -53,19 +47,16 @@ pub fn unit_disk(s: i64) -> VecRand {
     const ONE: i64 = 1048576;
     let mut seed: i64 = s;
     let mut out: Vec3 = Vec3 { x: 0, y: 0, z: 0 };
-    let mut found: bool = false;
     let mut i: i32 = 0;
     loop i < 32 {
-        if !found {
-            let rx: Rand = rand_sym(seed);
-            let ry: Rand = rand_sym(rx.seed);
-            seed = ry.seed;
-            let p: Vec3 = Vec3 { x: rx.value, y: ry.value, z: 0 };
-            let lsq: i64 = p.lensq();
-            if lsq < ONE {
-                out = p;
-                found = true;
-            }
+        let rx: Rand = rand_sym(seed);
+        let ry: Rand = rand_sym(rx.seed);
+        seed = ry.seed;
+        let p: Vec3 = Vec3 { x: rx.value, y: ry.value, z: 0 };
+        let lsq: i64 = p.lensq();
+        if lsq < ONE {
+            out = p;
+            break;
         }
         i = i + 1;
     }
