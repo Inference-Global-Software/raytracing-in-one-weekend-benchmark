@@ -170,3 +170,14 @@ scenes also render byte-identical at 1200×675 and 320×180, depth 50.
 | final scene 16t | 969.4 | 956.9 ksps | noise |
 
 (Best-of-3, interleaved, load 4.0.)
+
+# 2026-09-27 — HQ artifact under v0.0.6
+
+`out/final-hq-2400.png` re-rendered with the `4deba32-cleanup` module (Inference
+v0.0.6), same settings (2400×1350, 2000 spp, depth 50, 17 threads):
+11,638.5 s wall, 556.8 ksamples/s sustained (the `4f6738a` run: 4,079.75 s,
+1,588.3 ksamples/s). The run completed without a trap, so none of the
+renderer's checked `+`, `-` and `*` overflowed in 6.48 G samples, and the image
+is pixel-identical to the `4f6738a` render; with the same Node, the PNG file is
+byte-identical too. Run record:
+`bench/results/v2-final-hq-2400x1350-2000spp-17t-4deba32-cleanup.json`.

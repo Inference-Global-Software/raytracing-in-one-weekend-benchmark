@@ -1,0 +1,35 @@
+{
+  "label": "final-hq-2400-4deba32-cleanup",
+  "timestamp": "2026-09-27T14:33:56.164Z",
+  "wasm": {
+    "path": "out/main.wasm",
+    "bytes": 11100,
+    "sha256": "e8068199f99bffd020fc6f5a58b5b0d1f2544cffa264f81b43480c75f44ffc6e"
+  },
+  "settings": {
+    "width": 2400,
+    "height": 1350,
+    "scene": 1,
+    "spp": 2000,
+    "depth": 50,
+    "threads": 17
+  },
+  "host": {
+    "cpu": "Apple M5 Pro",
+    "cores": 18,
+    "arch": "arm64",
+    "platform": "darwin",
+    "node": "v26.0.0",
+    "toolchain_commit": "4deba32"
+  },
+  "timing": {
+    "wall_s": 11638.496049208,
+    "px_per_s": 278.3864844994712,
+    "samples_per_s": 556772.9689989424,
+    "ns_per_sample": 1796.0642051246914
+  },
+  "image": {
+    "sha256": "894cea7e40bbf3ab3ebe242ae20ac6444c827958b12ccadaedc84adcb75c0078",
+    "png_bytes": 3283449
+  }
+}
