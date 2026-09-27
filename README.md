@@ -27,12 +27,13 @@ entire renderer is Q20.20 fixed-point arithmetic in `i64`.*
 | Single file + external `.wasm` kernel linked via `[wasm-dependencies]` | **File-based module hierarchy** ([Inferara/inference#63](https://github.com/Inferara/inference/issues/63)): `src/{fx,rng,vec,sample,camera,materials,scene,main}.inf`, `use` imports, one self-contained artifact |
 | No `/` operator — division via a hand-linked Newton-iteration kernel | **Native `/` and `%`** (wasm `i64.div_s`): exact fixed-point division everywhere |
 | No unary minus (`0 - x` workarounds) | Unary `-`, `~` |
-| Free functions only | **Struct methods** (`v.dot(w)`, `p.unit()`, `Type::assoc()`) |
+| Free functions only | **Struct methods** (`v.dot(w)`, `p.unit_vector()`, `Type::assoc()`) |
 | No `break`; loops padded to fixed trip counts with `found` flags | `break` (rejection sampling exits early) |
 | Manual `let` for every constant | Fn-local `const` for all scalar types |
 | Whole-array literals only | **Array element writes** (`grid[i][j] = s`), computed indices, 2-D arrays |
 | — | `infs` project mode ([Inferara/inference#222](https://github.com/Inferara/inference/issues/222)): `Inference.toml`, `infs build`, **`[build.wasm-opt]`** post-optimization (Binaryen -Os: 15.5 KB → 9.5 KB; level chosen by measurement, see bench/RESULTS.md) |
 | — | Compiler safety rails: A036 stack-budget analysis, A041 shadowing rejection, dynamic bounds guards |
+| — | **Trapping integer overflow** (v0.0.6): every integer `+`, `-` (binary and unary) and `*` in the renderer traps rather than wraps; splitmix64's three modulo-2^64 sites opt out with `wrapping(...)` |
 
 ## What the renderer itself fixes over v1
 
@@ -88,6 +89,11 @@ abi_version() -> i64                                               // 2
 benchmarking), `1` = the book final scene.
 
 ## Build & render
+
+Requires the Inference toolchain
+[v0.0.6](https://github.com/Inferara/inference/releases/tag/v0.0.6) or newer
+(`infs` and `infc`); earlier releases reject `wrapping(...)`. The
+`[build.wasm-opt]` step needs Binaryen: `infs component add wasm-opt`.
 
 ```bash
 infs build                          # or: INFC_PATH=... infs build

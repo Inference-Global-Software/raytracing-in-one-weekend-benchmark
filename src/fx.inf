@@ -9,7 +9,9 @@
 // Division uses the native `/` operator (wasm i64.div_s) throughout; the old
 // toolchain had no `/` and linked an external Newton-iteration kernel instead.
 //
-// Domain contracts (callers keep values in range; none of these guard):
+// Domain contracts (callers keep values in range). Outside them an
+// overflowing `*` traps and so does a zero divisor, but shifts are not
+// overflow-checked: fixdiv's pre-shift silently drops high bits.
 //   fixmul(a, b)  requires |a*b| < 2^63          (|values| product < 2^23)
 //   fixdiv(a, b)  requires |a| < 2^23 * ONE, b != 0
 //   recip(b)      requires b != 0

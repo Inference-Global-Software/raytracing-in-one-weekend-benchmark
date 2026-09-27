@@ -54,9 +54,9 @@ pub fn make_camera(lookfrom: Vec3, lookat: Vec3, vup: Vec3, h_tan: i64,
     let vp_w: i64 = fixmul(vp_h, aspect);
 
     let fl: Vec3 = lookfrom.sub(lookat);
-    let w: Vec3 = fl.unit();
+    let w: Vec3 = fl.unit_vector();
     let cu: Vec3 = cross(vup, w);
-    let u: Vec3 = cu.unit();
+    let u: Vec3 = cu.unit_vector();
     let v: Vec3 = cross(w, u);
 
     let vp_u: Vec3 = u.scale(vp_w);
@@ -144,6 +144,6 @@ pub fn get_ray(cam: Camera, px: i64, py: i64, s: i64) -> RayRand {
     }
 
     let rd: Vec3 = pixel_sample.sub(origin);
-    let ud: Vec3 = rd.unit();
+    let ud: Vec3 = rd.unit_vector();
     return RayRand { orig: origin, dir: ud, seed: seed };
 }

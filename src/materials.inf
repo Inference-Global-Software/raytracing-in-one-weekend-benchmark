@@ -71,8 +71,8 @@ pub fn scatter(rdir: Vec3, h: HitRec, s: i64) -> Scatter {
         // Degenerate-direction guard: the book tests per-component
         // near-zero, but in Q20.20 a vector with components in the
         // [8, ~2000] raw window survives that test while lensq()'s
-        // truncation underflows, and unit() would return a badly
-        // over-long "unit" vector. A squared-length floor (the same
+        // truncation underflows, and unit_vector() would return a
+        // badly over-long "unit" vector. A squared-length floor (the same
         // 2^-10 used by sample.inf) closes the whole window.
         const LSQ_FLOOR: i64 = 1024;
         let rv: VecRand = unit_vec(seed);
@@ -83,13 +83,13 @@ pub fn scatter(rdir: Vec3, h: HitRec, s: i64) -> Scatter {
         if llsq <= LSQ_FLOOR {
             ldir = n;
         }
-        let lu: Vec3 = ldir.unit();
+        let lu: Vec3 = ldir.unit_vector();
         return Scatter { att: alb, orig: hp, dir: lu, ok: true, seed: seed };
     }
 
     if mat == M_METAL {
         let refl: Vec3 = reflect(rdir, n);
-        let ru: Vec3 = refl.unit();
+        let ru: Vec3 = refl.unit_vector();
         let fuzz: i64 = h.fuzz_or_ir;
         let fv: VecRand = unit_vec(seed);
         seed = fv.seed;
@@ -98,7 +98,7 @@ pub fn scatter(rdir: Vec3, h: HitRec, s: i64) -> Scatter {
         let mdir: Vec3 = ru.add(fz);
         let dn: i64 = mdir.dot(n);
         let ok: bool = dn > Z;
-        let mu: Vec3 = mdir.unit();
+        let mu: Vec3 = mdir.unit_vector();
         return Scatter { att: alb, orig: hp, dir: mu, ok: ok, seed: seed };
     }
 
@@ -132,6 +132,6 @@ pub fn scatter(rdir: Vec3, h: HitRec, s: i64) -> Scatter {
         let drefr: Vec3 = refract(rdir, n, ratio);
         ddir = drefr;
     }
-    let dxu: Vec3 = ddir.unit();
+    let dxu: Vec3 = ddir.unit_vector();
     return Scatter { att: white, orig: hp, dir: dxu, ok: true, seed: seed };
 }

@@ -37,7 +37,7 @@ pub fn unit_vec(s: i64) -> VecRand {
             let lsq: i64 = p.lensq();
             if lsq > LSQ_MIN {
                 if lsq <= ONE {
-                    let u: Vec3 = p.unit();
+                    let u: Vec3 = p.unit_vector();
                     out = u;
                     found = true;
                 }
