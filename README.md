@@ -115,13 +115,14 @@ The longitudinal ledger is [`bench/history.jsonl`](bench/history.jsonl):
 one JSON row per compiler snapshot, appended by
 
 ```bash
-TOOLCHAIN_COMMIT=<sha> REF=<prior-commit> bash bench/snapshot.sh
+INFS=<path>/infs INFC_PATH=<path>/infc REF=<prior-module> bash bench/snapshot.sh
 ```
 
-which builds the renderer, records size/build-time/throughput, and — when
-`REF` is set — re-benchmarks that prior module *interleaved* with the new one,
-so every row carries a same-conditions baseline instead of a stale absolute
-number. Preserved modules live in `bench/modules/`.
+which builds the renderer, records the toolchain (`infc --version` and
+`--commit-hash`), size/build-time/throughput, and — when `REF` is set —
+re-benchmarks that prior module *interleaved* with the new one, so every row
+carries a same-conditions baseline instead of a stale absolute number.
+Preserved modules live in `bench/modules/`.
 
 ### The image-identity canary
 
