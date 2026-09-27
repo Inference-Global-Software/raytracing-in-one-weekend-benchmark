@@ -27,20 +27,17 @@ pub struct Rand {
 pub fn mix64(s: i64) -> i64 {
     const C1: i64 = -4658895280553007687;
     const C2: i64 = -7723592293110705685;
-    const S30: i64 = 30;
-    const S27: i64 = 27;
-    const S31: i64 = 31;
     const M30: i64 = 17179869183;
     const M27: i64 = 137438953471;
     const M31: i64 = 8589934591;
     let mut z: i64 = s;
-    let sh30: i64 = (z >> S30) & M30;
+    let sh30: i64 = (z >> 30) & M30;
     z = z ^ sh30;
     z = wrapping(z * C1);
-    let sh27: i64 = (z >> S27) & M27;
+    let sh27: i64 = (z >> 27) & M27;
     z = z ^ sh27;
     z = wrapping(z * C2);
-    let sh31: i64 = (z >> S31) & M31;
+    let sh31: i64 = (z >> 31) & M31;
     z = z ^ sh31;
     return z;
 }
@@ -55,22 +52,18 @@ pub fn next(s: i64) -> Rand {
 
 // Uniform Q20.20 value in [0, 1): the output's top 20 bits.
 pub fn rand01(s: i64) -> Rand {
-    const S44: i64 = 44;
     const M44: i64 = 1048575;
     let r: Rand = next(s);
-    let raw: i64 = r.value;
-    let v: i64 = (raw >> S44) & M44;
+    let v: i64 = (r.value >> 44) & M44;
     return Rand { value: v, seed: r.seed };
 }
 
 // Uniform Q20.20 value in [-1, 1): top 21 bits minus ONE.
 pub fn rand_sym(s: i64) -> Rand {
-    const S43: i64 = 43;
     const M43: i64 = 2097151;
     const ONE: i64 = 1048576;
     let r: Rand = next(s);
-    let raw: i64 = r.value;
-    let v: i64 = ((raw >> S43) & M43) - ONE;
+    let v: i64 = ((r.value >> 43) & M43) - ONE;
     return Rand { value: v, seed: r.seed };
 }
 

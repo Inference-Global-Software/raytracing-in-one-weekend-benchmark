@@ -5,11 +5,12 @@
 //       packed colour 0x00RRGGBB; scene 0 = showcase, 1 = book final scene.
 //   abi_version() -> i64   (2 = this renderer)
 //
-// The sample and bounce loops, and the nearest-hit scan, are inlined here
-// rather than factored into functions: the 506-slot scene grid lives in this
-// frame, and Inference passes compounds by value against a 64 KB analyzed
-// stack budget (A036) — handing the grid to a callee would copy all 40 KB of
-// it per call. Everything that operates on O(1) data (vector algebra, camera,
+// The 506-slot scene grid (40 KB) lives in render_pixel's frame. The
+// nearest-hit scan takes it as a parameter its body never writes, which the
+// compiler passes by reference, so a bounce copies no scene data. The
+// stack-budget analysis (A036) still charges that parameter a full slot
+// (87 KB along render_pixel -> nearest_hit), so Inference.toml sets a 128 KiB
+// stack. Everything that operates on O(1) data (vector algebra, camera,
 // materials, sampling, RNG, fixed-point) lives in the other modules.
 //
 // The book's recursive ray_color becomes a bounded loop (recursion is
@@ -26,33 +27,91 @@ use materials::{HitRec, Scatter, scatter};
 use scene::{Sphere, zero_sphere, grid_row, hero_row};
 
 pub fn abi_version() -> i64 {
-    let v: i64 = 2;
-    return v;
+    return 2;
+}
+
+struct Hit {
+    t: i64;
+    i: i32;
+    j: i32;
+    hit: bool;
+}
+
+// Nearest hit along the ray o + t d (d unit) over every live slot of the
+// grid: the smallest root t > T_MIN, and the slot that produced it.
+fn nearest_hit(grid: [[Sphere; 22]; 23], o: Vec3, d: Vec3) -> Hit {
+    const F: i64 = 20;
+    const T_MIN: i64 = 1049;             // 0.001
+    const BIG: i64 = 1099511627776;      // 2^40
+    let ox0: i64 = o.x;
+    let oy0: i64 = o.y;
+    let oz0: i64 = o.z;
+    let dx0: i64 = d.x;
+    let dy0: i64 = d.y;
+    let dz0: i64 = d.z;
+
+    // d is unit, so the quadratic's a = 1:
+    // t^2 - 2 h t + c = 0 with h = d.oc, c = |oc|^2 - r^2, and
+    // the roots are h -/+ sqrt(h^2 - c). oc = center - origin
+    // (the v4 sign convention). Raw-sum dots are safe here:
+    // |d| = 1 and |oc| <= ~1100 keep the sums under 2^62.
+    let mut closest: i64 = BIG;
+    let mut bi: i32 = 0;
+    let mut bj: i32 = 0;
+    let mut bhit: bool = false;
+    let mut si: i32 = 0;
+    loop si < 23 {
+        let mut sj: i32 = 0;
+        loop sj < 22 {
+            let rad: i64 = grid[si][sj].radius;
+            if rad > 0 {
+                let ocx: i64 = grid[si][sj].cx - ox0;
+                let ocy: i64 = grid[si][sj].cy - oy0;
+                let ocz: i64 = grid[si][sj].cz - oz0;
+                let hb: i64 = (dx0 * ocx + dy0 * ocy + dz0 * ocz) >> F;
+                let ocl: i64 = (ocx * ocx + ocy * ocy + ocz * ocz) >> F;
+                let cc: i64 = ocl - grid[si][sj].rr;
+                let disc: i64 = fixmul(hb, hb) - cc;
+                if disc >= 0 {
+                    let sq: i64 = fixsqrt(disc);
+                    let mut root: i64 = hb - sq;
+                    let in1: bool = (root > T_MIN) && (root < closest);
+                    if !in1 {
+                        root = hb + sq;
+                    }
+                    let in2: bool = (root > T_MIN) && (root < closest);
+                    if in2 {
+                        closest = root;
+                        bi = si;
+                        bj = sj;
+                        bhit = true;
+                    }
+                }
+            }
+            sj = sj + 1;
+        }
+        si = si + 1;
+    }
+    return Hit { t: closest, i: bi, j: bj, hit: bhit };
 }
 
 pub fn render_pixel(px: i64, py: i64, width: i64, height: i64,
                     samples: i64, depth: i64, scene: i64) -> i64 {
     const F: i64 = 20;
     const ONE: i64 = 1048576;
-    const Z: i64 = 0;
-    const U: i64 = 1;
-    const T_MIN: i64 = 1049;             // 0.001
-    const BIG: i64 = 1099511627776;      // 2^40
     const SEL_FINAL: i64 = 1;
     const CMAX: i64 = 1047527;           // 0.999
-    const SH16: i64 = 16;
-    const SH8: i64 = 8;
 
     // Degenerate-argument guard: zero samples or a zero dimension would
     // reach an i64 division below; answer black instead of trapping.
-    if samples <= Z {
-        return Z;
+    if samples <= 0 {
+        return 0;
     }
-    if width <= Z {
-        return Z;
+    if width <= 0 {
+        return 0;
     }
-    if height <= Z {
-        return Z;
+    if height <= 0 {
+        return 0;
     }
 
     let w_fx: i64 = width << F;
@@ -94,7 +153,7 @@ pub fn render_pixel(px: i64, py: i64, width: i64, height: i64,
             let grow: [Sphere; 22] = grid_row(ga);
             grid[gi] = grow;
             gi = gi + 1;
-            ga = ga + U;
+            ga = ga + 1;
         }
     }
     let hrow: [Sphere; 22] = hero_row(scene);
@@ -112,114 +171,58 @@ pub fn render_pixel(px: i64, py: i64, width: i64, height: i64,
         let mut thr: Vec3 = Vec3 { x: 1048576, y: 1048576, z: 1048576 };
         let mut col: Vec3 = Vec3 { x: 0, y: 0, z: 0 };
         let mut dep: i64 = 0;
-        let mut done: bool = false;
 
         loop dep < depth {
-            if !done {
-                let ox0: i64 = cur_o.x;
-                let oy0: i64 = cur_o.y;
-                let oz0: i64 = cur_o.z;
-                let dx0: i64 = cur_d.x;
-                let dy0: i64 = cur_d.y;
-                let dz0: i64 = cur_d.z;
+            let nh: Hit = nearest_hit(grid, cur_o, cur_d);
 
-                // Nearest-hit scan. cur_d is unit, so the quadratic's a = 1:
-                // t^2 - 2 h t + c = 0 with h = d.oc, c = |oc|^2 - r^2, and
-                // the roots are h -/+ sqrt(h^2 - c). oc = center - origin
-                // (the v4 sign convention). Raw-sum dots are safe here:
-                // |d| = 1 and |oc| <= ~1100 keep the sums under 2^62.
-                let mut closest: i64 = BIG;
-                let mut bi: i32 = 0;
-                let mut bj: i32 = 0;
-                let mut bhit: bool = false;
-                let mut si: i32 = 0;
-                loop si < 23 {
-                    let mut sj: i32 = 0;
-                    loop sj < 22 {
-                        let rad: i64 = grid[si][sj].radius;
-                        if rad > Z {
-                            let ocx: i64 = grid[si][sj].cx - ox0;
-                            let ocy: i64 = grid[si][sj].cy - oy0;
-                            let ocz: i64 = grid[si][sj].cz - oz0;
-                            let hb: i64 = (dx0 * ocx + dy0 * ocy + dz0 * ocz) >> F;
-                            let ocl: i64 = (ocx * ocx + ocy * ocy + ocz * ocz) >> F;
-                            let cc: i64 = ocl - grid[si][sj].rr;
-                            let disc: i64 = fixmul(hb, hb) - cc;
-                            if disc >= Z {
-                                let sq: i64 = fixsqrt(disc);
-                                let mut root: i64 = hb - sq;
-                                let in1: bool = (root > T_MIN) && (root < closest);
-                                if !in1 {
-                                    root = hb + sq;
-                                }
-                                let in2: bool = (root > T_MIN) && (root < closest);
-                                if in2 {
-                                    closest = root;
-                                    bi = si;
-                                    bj = sj;
-                                    bhit = true;
-                                }
-                            }
-                        }
-                        sj = sj + 1;
-                    }
-                    si = si + 1;
+            if !nh.hit {
+                // Sky: blend white -> (0.5, 0.7, 1.0) on unit dir y.
+                const SKY_R: i64 = 524288;
+                const SKY_G: i64 = 734003;
+                let a_t: i64 = (cur_d.y + ONE) >> 1;
+                let omt: i64 = ONE - a_t;
+                let skyv: Vec3 = Vec3 { x: omt + fixmul(a_t, SKY_R),
+                                        y: omt + fixmul(a_t, SKY_G),
+                                        z: omt + a_t };
+                let lit: Vec3 = thr.mul(skyv);
+                col = lit;
+                break;
+            } else {
+                let ws: Sphere = grid[nh.i][nh.j];
+                let t_hit: i64 = nh.t;
+                let pd: Vec3 = cur_d.scale(t_hit);
+                let hp: Vec3 = cur_o.add(pd);
+                // Outward normal by exact division: (p - c) / r.
+                let nx: i64 = fixdiv(hp.x - ws.cx, ws.radius);
+                let ny: i64 = fixdiv(hp.y - ws.cy, ws.radius);
+                let nz: i64 = fixdiv(hp.z - ws.cz, ws.radius);
+                let dn: i64 = (cur_d.x * nx + cur_d.y * ny + cur_d.z * nz) >> F;
+                let ff: bool = dn < 0;
+                let mut nrm: Vec3 = Vec3 { x: nx, y: ny, z: nz };
+                if !ff {
+                    let flip: Vec3 = nrm.neg();
+                    nrm = flip;
                 }
-
-                if !bhit {
-                    // Sky: blend white -> (0.5, 0.7, 1.0) on unit dir y.
-                    const SKY_R: i64 = 524288;
-                    const SKY_G: i64 = 734003;
-                    let a_t: i64 = (dy0 + ONE) >> U;
-                    let omt: i64 = ONE - a_t;
-                    let skyv: Vec3 = Vec3 { x: omt + fixmul(a_t, SKY_R),
-                                            y: omt + fixmul(a_t, SKY_G),
-                                            z: omt + a_t };
-                    let lit: Vec3 = thr.mul(skyv);
-                    col = lit;
-                    done = true;
-                } else {
-                    let ws: Sphere = grid[bi][bj];
-                    let t_hit: i64 = closest;
-                    let pd: Vec3 = cur_d.scale(t_hit);
-                    let hp: Vec3 = cur_o.add(pd);
-                    // Outward normal by exact division: (p - c) / r.
-                    let nx: i64 = fixdiv(hp.x - ws.cx, ws.radius);
-                    let ny: i64 = fixdiv(hp.y - ws.cy, ws.radius);
-                    let nz: i64 = fixdiv(hp.z - ws.cz, ws.radius);
-                    let dn: i64 = (dx0 * nx + dy0 * ny + dz0 * nz) >> F;
-                    let ff: bool = dn < Z;
-                    let mut nrm: Vec3 = Vec3 { x: nx, y: ny, z: nz };
-                    if !ff {
-                        let flip: Vec3 = nrm.neg();
-                        nrm = flip;
-                    }
-                    let hrec: HitRec = HitRec {
-                        p: hp, normal: nrm, t: t_hit, front: ff, mat: ws.mat,
-                        albedo: Vec3 { x: ws.ar, y: ws.ag, z: ws.ab },
-                        fuzz_or_ir: ws.fuzz_or_ir };
-                    let sc: Scatter = scatter(cur_d, hrec, seed);
-                    seed = sc.seed;
-                    if !sc.ok {
-                        col = Vec3 { x: 0, y: 0, z: 0 };
-                        done = true;
-                    } else {
-                        let satt: Vec3 = sc.att;
-                        let nthr: Vec3 = thr.mul(satt);
-                        thr = nthr;
-                        let sorig: Vec3 = sc.orig;
-                        let sdir: Vec3 = sc.dir;
-                        cur_o = sorig;
-                        cur_d = sdir;
-                    }
+                let hrec: HitRec = HitRec {
+                    p: hp, normal: nrm, t: t_hit, front: ff, mat: ws.mat,
+                    albedo: Vec3 { x: ws.ar, y: ws.ag, z: ws.ab },
+                    fuzz_or_ir: ws.fuzz_or_ir };
+                let sc: Scatter = scatter(cur_d, hrec, seed);
+                seed = sc.seed;
+                if !sc.ok {
+                    break;
                 }
+                let nthr: Vec3 = thr.mul(sc.att);
+                thr = nthr;
+                cur_o = sc.orig;
+                cur_d = sc.dir;
             }
-            dep = dep + U;
+            dep = dep + 1;
         }
 
         let nacc: Vec3 = acc.add(col);
         acc = nacc;
-        sidx = sidx + U;
+        sidx = sidx + 1;
     }
 
     // Average, gamma 2 (sqrt of linear), clamp to 0.999, 8 bits per channel.
@@ -230,11 +233,11 @@ pub fn render_pixel(px: i64, py: i64, width: i64, height: i64,
     let gr: i64 = fixsqrt(avr);
     let gg: i64 = fixsqrt(avg);
     let gb: i64 = fixsqrt(avb);
-    let cr: i64 = clamp(gr, Z, CMAX);
-    let cg: i64 = clamp(gg, Z, CMAX);
-    let cb: i64 = clamp(gb, Z, CMAX);
-    let br: i64 = (cr << SH8) >> F;
-    let bg: i64 = (cg << SH8) >> F;
-    let bb: i64 = (cb << SH8) >> F;
-    return (br << SH16) | (bg << SH8) | bb;
+    let cr: i64 = clamp(gr, 0, CMAX);
+    let cg: i64 = clamp(gg, 0, CMAX);
+    let cb: i64 = clamp(gb, 0, CMAX);
+    let br: i64 = (cr << 8) >> F;
+    let bg: i64 = (cg << 8) >> F;
+    let bb: i64 = (cb << 8) >> F;
+    return (br << 16) | (bg << 8) | bb;
 }

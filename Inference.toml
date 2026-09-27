@@ -10,3 +10,9 @@ wasm-features = ["bulk-memory"]
 [build.wasm-opt]
 enabled = true
 level = "s"
+
+# The nearest-hit scan's grid parameter is passed by reference, but the
+# stack-budget analysis charges it a full 40 KB slot (see src/main.inf).
+[memory]
+pages = 2
+stack-size = 131072

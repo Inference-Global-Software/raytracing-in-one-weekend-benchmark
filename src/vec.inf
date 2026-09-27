@@ -65,9 +65,8 @@ pub struct Vec3 {
     // Zero-length input degenerates to +Y; callers never produce it on the
     // hot path (scatter directions are re-derived from unit inputs).
     pub fn unit_vector(self) -> Vec3 {
-        const Z: i64 = 0;
         let l: i64 = self.length();
-        if l <= Z {
+        if l <= 0 {
             return Vec3 { x: 0, y: 1048576, z: 0 };
         }
         let ux: i64 = fixdiv(self.x, l);

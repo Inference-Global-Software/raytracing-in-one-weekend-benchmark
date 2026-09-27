@@ -37,8 +37,6 @@ pub fn zero_sphere() -> Sphere {
 pub fn grid_row(a: i64) -> [Sphere; 22] {
     const ONE: i64 = 1048576;
     const HALF: i64 = 524288;
-    const Z: i64 = 0;
-    const U: i64 = 1;
     const F: i64 = 20;
     const SALT: i64 = 20260722;
     const JITTER: i64 = 943718;      // 0.9
@@ -86,7 +84,7 @@ pub fn grid_row(a: i64) -> [Sphere; 22] {
                 ar = fixmul(r1x.value, r2x.value);
                 ag = fixmul(r1y.value, r2y.value);
                 ab = fixmul(r1z.value, r2z.value);
-                fuzz_or_ir = Z;
+                fuzz_or_ir = 0;
             } else {
                 if choose < P_METAL {
                     let rmx: Rand = rand01(rjz.seed);
@@ -107,7 +105,7 @@ pub fn grid_row(a: i64) -> [Sphere; 22] {
             row[bi] = t;
         }
         bi = bi + 1;
-        b = b + U;
+        b = b + 1;
     }
     return row;
 }

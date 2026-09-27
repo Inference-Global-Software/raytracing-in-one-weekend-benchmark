@@ -67,14 +67,13 @@ pub fn make_camera(lookfrom: Vec3, lookat: Vec3, vup: Vec3, h_tan: i64,
     // The pre-shift needs |vp component| < 8 units to stay inside i64
     // (worst here: the final scene's vp_w = 6.3).
     const F: i64 = 20;
-    const S40: i64 = 40;
-    let duhx: i64 = (vp_u.x << S40) / w_fx;
-    let duhy: i64 = (vp_u.y << S40) / w_fx;
-    let duhz: i64 = (vp_u.z << S40) / w_fx;
+    let duhx: i64 = (vp_u.x << 40) / w_fx;
+    let duhy: i64 = (vp_u.y << 40) / w_fx;
+    let duhz: i64 = (vp_u.z << 40) / w_fx;
     let duh: Vec3 = Vec3 { x: duhx, y: duhy, z: duhz };
-    let dvhx: i64 = (vp_v.x << S40) / h_fx;
-    let dvhy: i64 = (vp_v.y << S40) / h_fx;
-    let dvhz: i64 = (vp_v.z << S40) / h_fx;
+    let dvhx: i64 = (vp_v.x << 40) / h_fx;
+    let dvhy: i64 = (vp_v.y << 40) / h_fx;
+    let dvhz: i64 = (vp_v.z << 40) / h_fx;
     let dvh: Vec3 = Vec3 { x: dvhx, y: dvhy, z: dvhz };
     let du: Vec3 = Vec3 { x: duhx >> F, y: duhy >> F, z: duhz >> F };
     let dv: Vec3 = Vec3 { x: dvhx >> F, y: dvhy >> F, z: dvhz >> F };
@@ -102,7 +101,6 @@ pub fn make_camera(lookfrom: Vec3, lookat: Vec3, vup: Vec3, h_tan: i64,
 pub fn get_ray(cam: Camera, px: i64, py: i64, s: i64) -> RayRand {
     const F: i64 = 20;
     const HALF: i64 = 524288;
-    const Z: i64 = 0;
 
     let jx: Rand = rand01(s);
     let jy: Rand = rand01(jx.seed);
@@ -115,30 +113,22 @@ pub fn get_ray(cam: Camera, px: i64, py: i64, s: i64) -> RayRand {
 
     // offset = (duh * s) >> 40: Q24.40 delta times Q20.20 coordinate,
     // one multiply and one shift per component (see the Camera comment).
-    const S40: i64 = 40;
-    let cduh: Vec3 = cam.duh;
-    let cdvh: Vec3 = cam.dvh;
-    let p00: Vec3 = cam.pixel00;
-    let offu: Vec3 = Vec3 { x: (cduh.x * sx) >> S40,
-                            y: (cduh.y * sx) >> S40,
-                            z: (cduh.z * sx) >> S40 };
-    let offv: Vec3 = Vec3 { x: (cdvh.x * sy) >> S40,
-                            y: (cdvh.y * sy) >> S40,
-                            z: (cdvh.z * sy) >> S40 };
-    let t1: Vec3 = p00.add(offu);
+    let offu: Vec3 = Vec3 { x: (cam.duh.x * sx) >> 40,
+                            y: (cam.duh.y * sx) >> 40,
+                            z: (cam.duh.z * sx) >> 40 };
+    let offv: Vec3 = Vec3 { x: (cam.dvh.x * sy) >> 40,
+                            y: (cam.dvh.y * sy) >> 40,
+                            z: (cam.dvh.z * sy) >> 40 };
+    let t1: Vec3 = cam.pixel00.add(offu);
     let pixel_sample: Vec3 = t1.add(offv);
 
-    let ccenter: Vec3 = cam.center;
-    let mut origin: Vec3 = ccenter;
-    if cam.lens > Z {
+    let mut origin: Vec3 = cam.center;
+    if cam.lens > 0 {
         let dr: VecRand = unit_disk(seed);
         seed = dr.seed;
-        let dp: Vec3 = dr.v;
-        let cddu: Vec3 = cam.ddisk_u;
-        let cddv: Vec3 = cam.ddisk_v;
-        let pu: Vec3 = cddu.scale(dp.x);
-        let pv: Vec3 = cddv.scale(dp.y);
-        let o1: Vec3 = ccenter.add(pu);
+        let pu: Vec3 = cam.ddisk_u.scale(dr.v.x);
+        let pv: Vec3 = cam.ddisk_v.scale(dr.v.y);
+        let o1: Vec3 = cam.center.add(pu);
         let o2: Vec3 = o1.add(pv);
         origin = o2;
     }

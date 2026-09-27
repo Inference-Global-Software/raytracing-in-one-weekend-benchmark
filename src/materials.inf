@@ -58,7 +58,6 @@ fn schlick(cos: i64, ri: i64) -> i64 {
 
 pub fn scatter(rdir: Vec3, h: HitRec, s: i64) -> Scatter {
     const ONE: i64 = 1048576;
-    const Z: i64 = 0;
     const M_LAMBERT: i64 = 0;
     const M_METAL: i64 = 1;
     let mut seed: i64 = s;
@@ -77,8 +76,7 @@ pub fn scatter(rdir: Vec3, h: HitRec, s: i64) -> Scatter {
         const LSQ_FLOOR: i64 = 1024;
         let rv: VecRand = unit_vec(seed);
         seed = rv.seed;
-        let rvv: Vec3 = rv.v;
-        let mut ldir: Vec3 = n.add(rvv);
+        let mut ldir: Vec3 = n.add(rv.v);
         let llsq: i64 = ldir.lensq();
         if llsq <= LSQ_FLOOR {
             ldir = n;
@@ -93,11 +91,10 @@ pub fn scatter(rdir: Vec3, h: HitRec, s: i64) -> Scatter {
         let fuzz: i64 = h.fuzz_or_ir;
         let fv: VecRand = unit_vec(seed);
         seed = fv.seed;
-        let fvv: Vec3 = fv.v;
-        let fz: Vec3 = fvv.scale(fuzz);
+        let fz: Vec3 = fv.v.scale(fuzz);
         let mdir: Vec3 = ru.add(fz);
         let dn: i64 = mdir.dot(n);
-        let ok: bool = dn > Z;
+        let ok: bool = dn > 0;
         let mu: Vec3 = mdir.unit_vector();
         return Scatter { att: alb, orig: hp, dir: mu, ok: ok, seed: seed };
     }

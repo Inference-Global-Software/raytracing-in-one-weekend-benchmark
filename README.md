@@ -28,12 +28,13 @@ entire renderer is Q20.20 fixed-point arithmetic in `i64`.*
 | No `/` operator — division via a hand-linked Newton-iteration kernel | **Native `/` and `%`** (wasm `i64.div_s`): exact fixed-point division everywhere |
 | No unary minus (`0 - x` workarounds) | Unary `-`, `~` |
 | Free functions only | **Struct methods** (`v.dot(w)`, `p.unit_vector()`, `Type::assoc()`) |
-| No `break`; loops padded to fixed trip counts with `found` flags | `break` (rejection sampling exits early) |
-| Manual `let` for every constant | Fn-local `const` for all scalar types |
+| No `break`; loops padded to fixed trip counts with `found` flags | `break` (rejection sampling and the bounce loop exit early) |
+| Manual `let` for every constant | **Integer literals typed by context** ([Inferara/inference#219](https://github.com/Inferara/inference/issues/219)): `x < 0`, `clamp(gr, 0, CMAX)`, `return 0;`; fn-local `const` for named values |
 | Whole-array literals only | **Array element writes** (`grid[i][j] = s`), computed indices, 2-D arrays |
 | — | `infs` project mode ([Inferara/inference#222](https://github.com/Inferara/inference/issues/222)): `Inference.toml`, `infs build`, **`[build.wasm-opt]`** post-optimization (Binaryen -Os: 15.5 KB → 9.5 KB; level chosen by measurement, see bench/RESULTS.md) |
 | — | Compiler safety rails: A036 stack-budget analysis, A041 shadowing rejection, dynamic bounds guards |
-| — | **Trapping integer overflow** (v0.0.6): every integer `+`, `-` (binary and unary) and `*` in the renderer traps rather than wraps; splitmix64's three modulo-2^64 sites opt out with `wrapping(...)` |
+| — | **Read-only compound parameters passed by reference** ([Inferara/inference#220](https://github.com/Inferara/inference/issues/220)) and a configurable stack (`[memory]`): the nearest-hit scan is its own function over the 40 KB scene grid |
+| — | **Trapping integer overflow** ([Inferara/inference#316](https://github.com/Inferara/inference/issues/316), v0.0.6): every integer `+`, `-` (binary and unary) and `*` in the renderer traps rather than wraps; splitmix64's three modulo-2^64 sites opt out with `wrapping(...)` |
 
 ## What the renderer itself fixes over v1
 
@@ -50,8 +51,8 @@ entire renderer is Q20.20 fixed-point arithmetic in `i64`.*
   in i64 with masked shifts, seeded per `(px, py, sample)`.
 - **The real book scene**: the 22×22 procedurally generated sphere field with
   the book's material mix (80 % diffuse `rand*rand`, 15 % metal, 5 % glass),
-  ground, and three hero spheres — 400+ live spheres per ray, scanned inline
-  against the analyzed 64 KB stack budget.
+  ground, and three hero spheres — 400+ live spheres per ray, scanned by one
+  function that reads the 40 KB grid by reference.
 - **v4 semantics** end to end: `oc = center − origin` sign convention,
   normalize-then-fuzz metal (draw consumed even at fuzz 0), defocus as a cone
   angle (`radius = focus · tan(defocus/2)`), centered pixel jitter,
@@ -60,7 +61,7 @@ entire renderer is Q20.20 fixed-point arithmetic in `i64`.*
 ## Layout
 
 ```
-Inference.toml     [package] + [build.wasm-opt] level s
+Inference.toml     [package] + [build.wasm-opt] level s + [memory] 128 KiB stack
 src/fx.inf         Q20.20 kernel: fixmul/fixdiv/recip/fixsqrt/clamp/pow5
 src/rng.inf        splitmix64 (i64, masked logical shifts), per-sample seeding
 src/vec.inf        Vec3 methods, cross/reflect/refract
@@ -68,7 +69,7 @@ src/sample.inf     unit-sphere / unit-disk rejection sampling
 src/camera.inf     v4 camera; get_ray returns unit directions
 src/materials.inf  lambertian / metal / dielectric scatter
 src/scene.inf      per-cell-seeded random field + hero/showcase rows
-src/main.inf       entry: render_pixel with the inlined nearest-hit scan
+src/main.inf       entry: render_pixel and the nearest-hit scan
 tools/render.mjs   parallel driver (worker_threads), PNG writer, bench JSON
 tools/downscale.mjs 2x2 box downscale in linear light (supersampled renders)
 bench/             benchmark matrix, ledger (history.jsonl), saved results
