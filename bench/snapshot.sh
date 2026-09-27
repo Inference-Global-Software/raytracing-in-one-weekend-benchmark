@@ -2,10 +2,10 @@
 # Toolchain benchmark snapshot for the Inference ray tracer.
 #
 # Treats this renderer as a fixed workload for tracking compiler progress:
-# builds src/ with the given toolchain, records binary size, build time, an
-# image-identity hash (a correctness canary — it changes only when codegen
-# semantics change), and best-of-N rendering throughput, then appends one
-# JSON line to bench/history.jsonl.
+# builds src/ with the given toolchain, records binary size, build time, the
+# image-identity hashes from bench/identity.sh (a correctness canary — the
+# image changes only when codegen semantics change), and best-of-N rendering
+# throughput, then appends one JSON line to bench/history.jsonl.
 #
 # Usage (from anywhere):
 #   [REF=<module>] bash bench/snapshot.sh
@@ -78,7 +78,9 @@ fi
 cp out/main.wasm "bench/modules/main-$MODULE.wasm"
 
 # ---- image-identity canary (deterministic at any thread count) --------
-IDENT_SHA=$(bash bench/identity.sh out/main.wasm)
+IDENT=$(bash bench/identity.sh out/main.wasm)
+IDENT_RGB=${IDENT%% *}
+IDENT_SHA=${IDENT#* }
 
 # ---- throughput matrix ------------------------------------------------
 MODS=("cur|out/main.wasm")
@@ -98,7 +100,7 @@ for rep in $(seq 1 "$REPS"); do
 done
 
 # ---- append the ledger row -------------------------------------------
-COMMIT=$COMMIT VERSION=$VERSION MODULE=$MODULE REF=$REF WASM_SHA=$WASM_SHA SRC_SHA=$SRC_SHA IDENT_SHA=$IDENT_SHA \
+COMMIT=$COMMIT VERSION=$VERSION MODULE=$MODULE REF=$REF WASM_SHA=$WASM_SHA SRC_SHA=$SRC_SHA IDENT_RGB=$IDENT_RGB IDENT_SHA=$IDENT_SHA \
 SIZE_PRE=$SIZE_PRE SIZE_OPT=$SIZE_OPT WASM_OPT=$WASM_OPT BUILD_S=$BUILD_S \
 LOAD=$LOAD NOTES=$NOTES TMP=$TMP node -e '
 const fs = require("fs"), os = require("os");
@@ -125,7 +127,7 @@ const row = {
   source_sha256: e.SRC_SHA, wasm_sha256: e.WASM_SHA,
   size_preopt: +e.SIZE_PRE, size_opt: +e.SIZE_OPT, wasm_opt: e.WASM_OPT,
   build_wall_s: +e.BUILD_S,
-  identity_sha256: e.IDENT_SHA,
+  identity_sha256: e.IDENT_SHA, identity_rgb_sha256: e.IDENT_RGB,
   bench_ksps: best(runs.cur), runs_ksps: runs.cur,
   ref: e.REF ? { module: e.REF, commit: refCommit(e.REF), bench_ksps: best(runs.ref), runs_ksps: runs.ref } : null,
   host: String((os.cpus()[0] || {}).model || "unknown CPU").trim() + ", " + os.cpus().length + " cores",

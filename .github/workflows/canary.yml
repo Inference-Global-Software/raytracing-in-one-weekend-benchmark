@@ -79,8 +79,9 @@ jobs:
 
       - name: Image identity matches the ledger
         run: |
-          expected=$(tail -n 1 bench/history.jsonl | jq -r .identity_sha256)
-          actual=$(bash bench/identity.sh out/main.wasm)
+          expected=$(tail -n 1 bench/history.jsonl | jq -r .identity_rgb_sha256)
+          ident=$(bash bench/identity.sh out/main.wasm)
+          actual=${ident%% *}
           echo "expected $expected"
           echo "actual   $actual"
           if [ "$actual" != "$expected" ]; then

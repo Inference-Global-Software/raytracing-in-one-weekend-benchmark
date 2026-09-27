@@ -127,10 +127,14 @@ Preserved modules live in `bench/modules/`.
 
 ### The image-identity canary
 
-Each ledger row includes the SHA-256 of a small deterministic render — a value
-that moves only when codegen *semantics* do. When it changes between two
-toolchain snapshots, the rendered image changed too; what changed in the
-compiler is in its own git history between those commits.
+Each ledger row includes the SHA-256 of a small deterministic render
+([`bench/identity.sh`](bench/identity.sh)) — a value that moves only when
+codegen *semantics* do. When it changes between two toolchain snapshots, the
+rendered image changed too; what changed in the compiler is in its own git
+history between those commits. `identity_rgb_sha256` hashes the decoded image
+data and is the same on every host; `identity_sha256` hashes the PNG file,
+whose compressed bytes also depend on the zlib build of the Node that wrote
+it, so compare it only between rows taken with the same Node.
 
 CI ([`.github/workflows/canary.yml`](.github/workflows/canary.yml)) builds
 the renderer with two released toolchains — the one the latest ledger row was
