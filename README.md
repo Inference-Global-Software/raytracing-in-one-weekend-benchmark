@@ -16,9 +16,12 @@ book's actual final scene — the ~480-sphere random field — rather than a
 
 ![final](out/final-hq.png)
 
-*2400×1350, 2000 samples/pixel, depth 50 — 6.48 G samples in 68 minutes on an
-Apple M5 Pro (17 threads), from a 9.5 KB wasm module. No floating point: the
-entire renderer is Q20.20 fixed-point arithmetic in `i64`.*
+*2400×1350, 2000 samples/pixel, depth 50 — 6.48 G samples, rendered in 68
+minutes on an Apple M5 Pro (17 threads) by the 9.5 KB `4f6738a` module, and
+re-rendered pixel-identical under Inference v0.0.6 in 3 h 14 min by an 11.1 KB
+module whose every integer `+`, `-` and `*` outside the RNG traps on overflow.
+No floating point: the entire renderer is Q20.20 fixed-point arithmetic in
+`i64`.*
 
 ## What the language gained since v1 (and how this project uses it)
 
