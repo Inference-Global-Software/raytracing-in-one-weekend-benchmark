@@ -151,3 +151,22 @@ The compiler changes between the two toolchains are at
 `dafdfb7` is the head of the #335 pull-request branch rather than a commit on
 `main`; #335 landed as `5e90a48` + `9106d66`, so the comparison runs from
 their merge-base, `1534b5a`.
+
+## Source revision under the same toolchain
+
+A second v0.0.6 row (module `4deba32-cleanup`) measures the source after it
+dropped workarounds the language no longer needs: constants named after their
+own value, field copies, `found`/`done` loop flags, and the nearest-hit scan
+inlined into `render_pixel` (it is now a function whose grid parameter is
+passed by reference, with a 128 KiB `[memory]` stack). Identity unchanged; both
+scenes also render byte-identical at 1200×675 and 320×180, depth 50.
+
+|  | 4deba32 | 4deba32-cleanup | delta |
+|---|---|---|---|
+| wasm pre-opt | 17,853 B | 17,309 B | −544 B |
+| wasm shipped (-Os) | 11,275 B | 11,100 B | −175 B |
+| showcase 1t | 575.3 | 566.4 ksps | noise |
+| final scene 1t | 77.6 | 77.6 ksps | noise |
+| final scene 16t | 969.4 | 956.9 ksps | noise |
+
+(Best-of-3, interleaved, load 4.0.)
